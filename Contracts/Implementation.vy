@@ -27,5 +27,5 @@ def __default__():
 	assert not self._locked
 	self._locked = True
 	raw_call(self.processor,b"",value=self.balance,gas=msg.gas - 10000,revert_on_failure=True)
-	log payed(processor=self.processor,order_id=self.order_id,amount=self.balance)
+	log payed(processor=self.processor,order_id=self.order_id,amount=msg.value)
 	self._locked = False
