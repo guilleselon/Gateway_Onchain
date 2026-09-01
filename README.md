@@ -20,11 +20,11 @@ The system consists of two Vyper contracts:
    - Immutably stores: `order_id` and `processor`.
    - In its `initialize()`:
      - Runs **only once** when the proxy is deployed.
-     - If the contract already has a balance (`self.balance > 0`), it **forwards that entire balance** to the `processor` and emits `payed(processor, order_id, amount)`.
+     - If the contract already has a balance (`self.balance > 0`), it **forwards that entire balance** to the `processor` and emits `paid(processor, order_id, amount)`.
    - In its `__default__` (receiving ETH after initialization):
      - Forwards 100% of the balance to the `processor` via `raw_call`.
      - Uses **dynamic gas**: `msg.gas - 10000`.
-     - Emits `payed(processor, order_id, amount)`.
+     - Emits `paid(processor, order_id, amount)`.
    - Includes a reentrancy lock (`_locked`).
 
 ---
@@ -38,8 +38,8 @@ The system consists of two Vyper contracts:
 4. **The off‑chain system** (backend) detects the incoming transaction.
 5. **The system** deploys the proxy by calling `Factory.create(order_id, processor, salt)`.
    - During initialisation, the proxy forwards the accumulated balance to the `processor` and emits `payed`.
-6. **The system** listens for the `payed` event to associate the payment with the `order_id`.
-7. **If the amount is insufficient**, the customer can send more ETH to the same address (the proxy is already deployed and its `__default__` will forward it and emit another `payed`).
+6. **The system** listens for the `paid` event to associate the payment with the `order_id`.
+7. **If the amount is insufficient**, the customer can send more ETH to the same address (the proxy is already deployed and its `__default__` will forward it and emit another `paid`).
 
 > ⚡ **Key point**: The proxy is only deployed if there is an actual payment, saving gas on orders that are never executed.
 
@@ -50,7 +50,7 @@ The system consists of two Vyper contracts:
 - **Non‑custodial**: Funds are never held; they flow directly to the `processor` as soon as the proxy is initialised or receives funds.
 - **Deploy‑on‑demand**: The proxy is created only when there are funds to forward.
 - **Deterministic addresses**: The address can be pre‑calculated without deployment.
-- **Clear events**: `payed` includes `order_id` and `amount`; the backend can sum multiple payments for the same order.
+- **Clear events**: `paid` includes `order_id` and `amount`; the backend can sum multiple payments for the same order.
 - **Smart gas handling**: `msg.gas - 10000` avoids failures due to fixed limits.
 - **Reentrancy protection**: Uses `_locked`.
 
