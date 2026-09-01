@@ -1,6 +1,6 @@
 # @version 0.4.3
 
-event payed:
+event paid:
 	processor: indexed(address)
 	order_id: uint256
 	amount: uint256
@@ -17,7 +17,7 @@ def initialize(_order_id: uint256, _processor: address):
 	self.processor = _processor
 	if self.balance > 0:
 		raw_call(self.processor,b"",value=self.balance,gas=msg.gas - 10000,revert_on_failure=True)
-		log payed(processor=self.processor,order_id=self.order_id,amount=self.balance)
+		log paid(processor=self.processor,order_id=self.order_id,amount=self.balance)
 	self.initialized = True
 
 @external
@@ -27,5 +27,5 @@ def __default__():
 	assert not self._locked
 	self._locked = True
 	raw_call(self.processor,b"",value=self.balance,gas=msg.gas - 10000,revert_on_failure=True)
-	log payed(processor=self.processor,order_id=self.order_id,amount=msg.value)
+	log paid(processor=self.processor,order_id=self.order_id,amount=msg.value)
 	self._locked = False
