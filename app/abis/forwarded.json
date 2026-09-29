@@ -1,0 +1,86 @@
+[
+  {
+    "name": "Paid",
+    "inputs": [
+      {
+        "name": "order_id",
+        "type": "uint256",
+        "indexed": false
+      },
+      {
+        "name": "payer",
+        "type": "address",
+        "indexed": true
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false
+      }
+    ],
+    "anonymous": false,
+    "type": "event"
+  },
+  {
+    "stateMutability": "nonpayable",
+    "type": "function",
+    "name": "initialize",
+    "inputs": [
+      {
+        "name": "_order_id",
+        "type": "uint256"
+      },
+      {
+        "name": "_processor",
+        "type": "address"
+      }
+    ],
+    "outputs": []
+  },
+  {
+    "stateMutability": "payable",
+    "type": "fallback"
+  },
+  {
+    "stateMutability": "view",
+    "type": "function",
+    "name": "order_id",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "stateMutability": "view",
+    "type": "function",
+    "name": "processor",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address"
+      }
+    ]
+  },
+  {
+    "stateMutability": "view",
+    "type": "function",
+    "name": "initialized",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool"
+      }
+    ]
+  },
+  {
+    "stateMutability": "nonpayable",
+    "type": "constructor",
+    "inputs": [],
+    "outputs": []
+  }
+]
