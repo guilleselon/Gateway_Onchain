@@ -27,6 +27,7 @@ from app.core.auth import (
 )
 from app.core.db import get_session
 from app.core.models import Chain, Payment, PaymentStatus, Token
+from app.core.rate_limit import check_rate_limit
 from app.templates import (
     _QRContent,
     dashboard_home,
@@ -286,6 +287,16 @@ def register(app, rt) -> None:
         merchant = authenticate_api_key(api_key)
         if not merchant:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+        # Rate limiting: 60 requests per minute per API key
+        if not check_rate_limit(merchant["id"]):
+            log.warning(
+                f"Rate limit exceeded for api_key_id={merchant['id']}"
+            )
+            return JSONResponse(
+                {"error": "rate limit exceeded. Max 60 payments per minute."},
+                status_code=429,
+            )
 
         try:
             body = await request.json()
