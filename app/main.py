@@ -23,6 +23,14 @@ from app.config import RPC_URL, SESSION_SECRET, setup_logging
 from app.core.db import engine
 from app.routes import register
 
+# The web service requires SESSION_SECRET to sign session cookies.
+# The worker does not import this module, so it does not need it.
+if not SESSION_SECRET:
+    raise RuntimeError(
+        "SESSION_SECRET is not set. "
+        "The web service requires it to sign session cookies."
+    )
+
 # Ensure the DB connection pool is closed cleanly on shutdown (SIGTERM/SIGINT).
 # Important on platforms that restart services frequently (Render, Railway)
 # to avoid leaving orphan connections in PostgreSQL.
