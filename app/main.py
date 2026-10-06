@@ -20,7 +20,7 @@ from fasthtml.common import Script, Style, fast_app
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import RPC_URL, SESSION_SECRET, setup_logging
-from app.core.db import engine
+from app.core.db import engine, ensure_db_initialized
 from app.routes import register
 
 # The web service requires SESSION_SECRET to sign session cookies.
@@ -37,6 +37,14 @@ if not SESSION_SECRET:
 atexit.register(engine.dispose)
 
 log = setup_logging("gateway_app")
+
+# Auto-initialize the database on first boot.
+# Idempotent: creates tables, seeds chain/tokens, and prints a demo API key
+# if there is none. Safe to run every time the app starts.
+try:
+    ensure_db_initialized()
+except Exception as e:
+    log.exception(f"DB auto-initialization failed: {e}")
 
 _rpc_for_js = RPC_URL if (RPC_URL and RPC_URL.startswith("http")) else ""
 
