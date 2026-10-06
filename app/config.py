@@ -34,6 +34,8 @@ COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # --- Dashboard sessions ---
+# SESSION_SECRET is only required by the web app (to sign session cookies).
+# The worker does not use it. Validation happens in app/main.py instead.
 SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 
 # --- Quotas and limits ---
@@ -63,8 +65,6 @@ if not FACTORY_ADDRESS_RAW:
     raise RuntimeError("FACTORY_ADDRESS is not set in .env")
 if not MASTER_ADDRESS_RAW:
     raise RuntimeError("MASTER_ADDRESS is not set in .env")
-if not SESSION_SECRET:
-    raise RuntimeError("SESSION_SECRET is not set in .env")
 
 CHAIN_ID = int(CHAIN_ID_RAW)
 
