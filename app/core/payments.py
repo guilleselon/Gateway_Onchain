@@ -89,12 +89,17 @@ def create_payment(
     """
     Create a new payment.
 
+    Idempotent: if a payment with the same (api_key_id, external_ref)
+    already exists, it is returned as-is instead of creating a duplicate.
+    This protects against client retries caused by network timeouts.
+
     Steps:
-      1. Validate token and chain.
-      2. Generate unique order_id and salt.
-      3. Compute the proxy address pointing to wallet_address.
-      4. Compute amount_token_suggested with the latest rate.
-      5. Store the Payment with status=pending and expires_at.
+      1. Idempotency check.
+      2. Validate token and chain.
+      3. Generate unique order_id and salt.
+      4. Compute the proxy address pointing to wallet_address.
+      5. Compute amount_token_suggested with the latest rate.
+      6. Store the Payment with status=pending and expires_at.
 
     Args:
         session: SQLAlchemy session.
@@ -108,12 +113,26 @@ def create_payment(
         merchant_name: human-readable merchant name, for the UI (optional).
 
     Returns:
-        The newly created Payment.
+        The newly created (or existing) Payment.
 
     Raises:
         PaymentError if anything is wrong.
     """
-    # Basic validation
+    # --- Idempotency: return existing payment if one exists ---
+    if api_key_id is not None and external_ref:
+        existing = (
+            session.query(Payment)
+            .filter_by(api_key_id=api_key_id, external_ref=external_ref)
+            .first()
+        )
+        if existing is not None:
+            log.info(
+                f"Payment already exists for external_ref={external_ref} "
+                f"(id={existing.id}); returning it."
+            )
+            return existing
+
+    # --- Basic validation ---
     if amount_usd_cents <= 0:
         raise PaymentError("amount_usd_cents must be greater than 0")
     if not external_ref:
@@ -125,7 +144,7 @@ def create_payment(
     if not webhook_secret:
         raise PaymentError("webhook_secret is empty")
 
-    # Validate token and chain
+    # --- Validate token and chain ---
     token = session.get(Token, token_id)
     if not token or not token.active:
         raise PaymentError(f"token {token_id} does not exist or is inactive")
@@ -134,7 +153,7 @@ def create_payment(
     if not chain or not chain.active:
         raise PaymentError(f"chain {token.chain_id} does not exist or is inactive")
 
-    # Latest rate (required to suggest the amount)
+    # --- Latest rate (required to suggest the amount) ---
     rate = rates.get_latest_rate(session, token.id)
     if not rate:
         raise PaymentError(
@@ -142,11 +161,11 @@ def create_payment(
             f"Run rates.update_all_rates() first."
         )
 
-    # Generate unique contract identifiers
+    # --- Generate unique contract identifiers ---
     order_id = _generate_order_id()
     salt = _generate_salt()
 
-    # Compute the proxy address
+    # --- Compute the proxy address ---
     w3 = get_web3(chain.rpc_url)
     factory = get_factory_contract(w3, chain.factory_address)
     try:
@@ -156,12 +175,12 @@ def create_payment(
     except Exception as e:
         raise PaymentError(f"could not compute proxy: {e}") from e
 
-    # Suggested amount in token (stored as string to avoid SQLite overflow)
+    # --- Suggested amount in token (stored as string to avoid overflow) ---
     amount_token_suggested = _calculate_amount_token(
         amount_usd_cents, rate.usd_rate, token.decimals,
     )
 
-    # Persist
+    # --- Persist ---
     now = _utcnow()
     payment = Payment(
         api_key_id=api_key_id,
@@ -387,4 +406,3 @@ def get_payments_to_webhook(session: Session) -> list[Payment]:
         .filter(Payment.webhook_sent_at.is_(None))
         .all()
     )
-
