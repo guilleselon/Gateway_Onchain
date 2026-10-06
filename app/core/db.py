@@ -15,6 +15,8 @@ SQLAlchemy 2.x requires `postgresql://`, and by default picks the psycopg
 the psycopg2 dialect with the explicit `+psycopg2` suffix.
 """
 
+import logging
+import secrets
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine, event
@@ -174,3 +176,107 @@ def init_db() -> None:
     """
     from app.core import models  # noqa: F401
     Base.metadata.create_all(bind=engine)
+
+
+# ---------------------------------------------------------------------------
+# Auto-initialization
+# ---------------------------------------------------------------------------
+
+def ensure_db_initialized() -> None:
+    """
+    Auto-initialize the database on startup.
+
+    Idempotent: safe to run every time the app boots. It:
+      1. Creates all tables if they do not exist.
+      2. Seeds the chain from .env if there is none.
+      3. Seeds MON and USDC tokens if there are none.
+      4. Generates a demo API key if there are none, and prints it to the log.
+
+    Intended for platforms without shell access (e.g. Render free tier).
+    """
+    log = logging.getLogger("gateway.db")
+
+    # 1. Create tables (idempotent: does nothing if they exist)
+    init_db()
+    log.info("Database tables ensured.")
+
+    # Deferred imports to avoid circular imports at module load time
+    from app.config import (
+        CHAIN_CONFIRMATIONS,
+        CHAIN_EXPLORER,
+        CHAIN_ID,
+        CHAIN_NAME,
+        FACTORY_ADDRESS,
+        MASTER_ADDRESS,
+        RPC_URL,
+    )
+    from app.core.auth import hash_api_key
+    from app.core.models import ApiKey, Chain, Token
+
+    with get_session() as s:
+        # 2. Seed the chain if the table is empty
+        if s.query(Chain).count() == 0:
+            chain = Chain(
+                name=CHAIN_NAME,
+                chain_id=CHAIN_ID,
+                rpc_url=RPC_URL,
+                factory_address=FACTORY_ADDRESS,
+                master_address=MASTER_ADDRESS,
+                explorer_url=CHAIN_EXPLORER or None,
+                confirmations_required=CHAIN_CONFIRMATIONS,
+                active=True,
+            )
+            s.add(chain)
+            s.flush()
+            log.info(f"Seeded chain '{CHAIN_NAME}' (id={chain.id}).")
+        else:
+            chain = s.query(Chain).first()
+
+        # 3. Seed tokens if the table is empty
+        if s.query(Token).count() == 0:
+            tokens_seed = [
+                {
+                    "symbol": "MON",
+                    "address": None,
+                    "decimals": 18,
+                    "coingecko_id": "monad",
+                },
+                {
+                    "symbol": "USDC",
+                    "address": None,
+                    "decimals": 6,
+                    "coingecko_id": "usd-coin",
+                },
+            ]
+            for t in tokens_seed:
+                s.add(Token(chain_id=chain.id, active=True, **t))
+            log.info("Seeded MON and USDC tokens.")
+        else:
+            # Make sure MON exists even if there are other tokens
+            if not s.query(Token).filter_by(symbol="MON").first():
+                s.add(Token(
+                    chain_id=chain.id,
+                    symbol="MON",
+                    address=None,
+                    decimals=18,
+                    coingecko_id="monad",
+                    active=True,
+                ))
+                log.info("Seeded MON token.")
+
+        # 4. Generate a demo API key if there are none
+        if s.query(ApiKey).count() == 0:
+            plain_key = "sk_live_" + secrets.token_hex(32)
+            key_hash = hash_api_key(plain_key)
+            key_preview = plain_key[:16] + "..."
+            s.add(ApiKey(
+                name="Demo Merchant",
+                key_hash=key_hash,
+                key_preview=key_preview,
+                active=True,
+            ))
+            log.warning("=" * 60)
+            log.warning("  NO API KEY FOUND. A DEMO KEY WAS CREATED:")
+            log.warning(f"  {plain_key}")
+            log.warning("  Copy it now. It will not be shown again.")
+            log.warning("=" * 60)
