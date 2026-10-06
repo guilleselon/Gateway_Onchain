@@ -1,21 +1,29 @@
 # render.yaml
 #
-# Blueprint for Render. Defines three resources:
-#   1. gateway-app     — Web Service (API + UI)
-#   2. gateway-worker  — Background Worker (polling, deploy, webhooks, rates)
+# Render Blueprint for the Onchain Gateway.
+#
+# Resources:
+#   1. gateway-app     — Web Service (API + dashboard + public payment UI)
+#   2. gateway-worker  — Web Service that wraps the worker threads
+#                        (workaround: Render free tier has no background workers)
 #   3. gateway-db      — PostgreSQL database
 #
 # Variables marked with `sync: false` are NOT stored in this file.
-# You will be asked to provide them once in the Render dashboard.
+# You will be prompted to enter them once in the Render dashboard.
 #
-# Variables marked with `fromDatabase` are automatically injected by Render
-# from the linked database.
+# Variables marked with `fromDatabase` are injected automatically by Render
+# from the linked PostgreSQL instance.
+#
+# IMPORTANT for the worker:
+#   On the free tier, Web Services sleep after 15 minutes of inactivity.
+#   To keep the worker alive, ping its /health endpoint every 5 minutes
+#   from an external service (cron-job.org, UptimeRobot, etc.).
 #
 # Docs: https://render.com/docs/blueprint-spec
 
 services:
   # ---------------------------------------------------------------------------
-  # Web Service: serves the API, the dashboard and the public payment UI.
+  # Web Service: API, dashboard, public payment UI.
   # ---------------------------------------------------------------------------
   - type: web
     name: gateway-app
@@ -28,7 +36,7 @@ services:
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
-      # Database: injected automatically by Render from the linked Postgres.
+      # Database (injected by Render from the linked Postgres)
       - key: DATABASE_URL
         fromDatabase:
           name: gateway-db
@@ -46,7 +54,7 @@ services:
       - key: CHAIN_CONFIRMATIONS
         value: "1"
 
-      # Contracts (filled after running scripts/deploy_contracts.py)
+      # Contracts (from scripts/deploy_contracts.py)
       - key: FACTORY_ADDRESS
         sync: false
       - key: MASTER_ADDRESS
@@ -70,19 +78,23 @@ services:
       - key: COINGECKO_API_KEY
         sync: false
 
-      # Python version
+      # Python and logging
       - key: PYTHON_VERSION
         value: "3.11"
-
-      # Logging
       - key: LOG_LEVEL
         value: "INFO"
 
   # ---------------------------------------------------------------------------
-  # Background Worker: processes payments, deploys proxies, sends webhooks,
-  # refreshes exchange rates.
+  # Worker wrapped as a Web Service.
+  #
+  # The worker runs its four threads (polling, deploy, webhooks, rates) in
+  # the background. The HTTP server only answers /health and / to satisfy
+  # Render's health checks.
+  #
+  # IMPORTANT: On the free tier, this service sleeps after 15 minutes of
+  # inactivity. Ping /health every 5 minutes to keep it awake.
   # ---------------------------------------------------------------------------
-  - type: worker
+  - type: web
     name: gateway-worker
     runtime: python
     plan: free
@@ -90,7 +102,8 @@ services:
     branch: main
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m app.worker.main
+    startCommand: uvicorn app.worker.web:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
       # Same database as the web service.
       - key: DATABASE_URL
@@ -130,16 +143,14 @@ services:
       - key: COINGECKO_API_KEY
         sync: false
 
-      # Python version
+      # Python and logging
       - key: PYTHON_VERSION
         value: "3.11"
-
-      # Logging
       - key: LOG_LEVEL
         value: "INFO"
 
 # ---------------------------------------------------------------------------
-# PostgreSQL database
+# PostgreSQL database (free tier: expires after 90 days, no backups)
 # ---------------------------------------------------------------------------
 databases:
   - name: gateway-db
