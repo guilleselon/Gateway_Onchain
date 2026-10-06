@@ -10,6 +10,7 @@ Serves:
 No CDN. Minimal inline CSS.
 """
 
+import atexit
 import sys
 from pathlib import Path
 
@@ -19,7 +20,13 @@ from fasthtml.common import Script, Style, fast_app
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import RPC_URL, SESSION_SECRET, setup_logging
+from app.core.db import engine
 from app.routes import register
+
+# Ensure the DB connection pool is closed cleanly on shutdown (SIGTERM/SIGINT).
+# Important on platforms that restart services frequently (Render, Railway)
+# to avoid leaving orphan connections in PostgreSQL.
+atexit.register(engine.dispose)
 
 log = setup_logging("gateway_app")
 
@@ -362,4 +369,3 @@ if __name__ == "__main__":
     import uvicorn
     log.info("Starting gateway at http://0.0.0.0:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False, log_level="info")
-
