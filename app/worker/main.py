@@ -13,6 +13,7 @@ Usage:
 Stops all threads on Ctrl+C (SIGINT) or SIGTERM.
 """
 
+import atexit
 import signal
 import sys
 import threading
@@ -22,9 +23,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from app.config import setup_logging
+from app.core.db import engine
 from app.worker import deploy, polling
 from app.worker import rates as worker_rates
 from app.worker import webhooks as worker_webhooks
+
+# Ensure the DB connection pool is closed cleanly on shutdown (SIGTERM/SIGINT).
+# Important on platforms that restart services frequently (Render, Railway)
+# to avoid leaving orphan connections in PostgreSQL.
+atexit.register(engine.dispose)
 
 log = setup_logging("gateway_worker")
 
@@ -104,4 +111,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
