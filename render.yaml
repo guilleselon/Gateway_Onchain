@@ -20,7 +20,7 @@ services:
   - type: web
     name: gateway-app
     runtime: python
-    plan: starter
+    plan: free
     region: oregon
     branch: main
     autoDeploy: true
@@ -85,7 +85,7 @@ services:
   - type: worker
     name: gateway-worker
     runtime: python
-    plan: starter
+    plan: free
     region: oregon
     branch: main
     autoDeploy: true
