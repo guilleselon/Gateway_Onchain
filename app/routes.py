@@ -114,15 +114,36 @@ def register(app, rt) -> None:
         return landing_page()
 
     # -----------------------------------------------------------------------
-    # Health
+    # Health check
     # -----------------------------------------------------------------------
 
     @rt("/health", methods=["GET"])
     def health():
-        return JSONResponse({
-            "status": "ok",
+        """
+        Health check used by platforms (Render, Railway, VPS monitors) to
+        know if the service is alive.
+
+        Returns 200 if the API can connect to its database.
+        Returns 503 if the database is unreachable.
+        """
+        from sqlalchemy import text
+        from app.core.db import engine
+
+        db_ok = False
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            db_ok = True
+        except Exception as e:
+            log.error(f"Health check: DB unreachable: {e}")
+
+        payload = {
+            "status": "ok" if db_ok else "degraded",
+            "db": db_ok,
             "ts": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        status_code = 200 if db_ok else 503
+        return JSONResponse(payload, status_code=status_code)
 
     # -----------------------------------------------------------------------
     # Login / logout
@@ -406,4 +427,3 @@ def register(app, rt) -> None:
                 payments.mark_user_claimed(s, p)
                 p = payments.get_payment(s, payment_id)
             return status_fragment(p)
-
