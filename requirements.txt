@@ -18,6 +18,7 @@ httpx>=0.27
 # -----------------------------------------------------------------------------
 SQLAlchemy>=2.0,<3
 alembic>=1.13
+psycopg2-binary>=2.9        # PostgreSQL driver for production (Render)
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -25,7 +26,7 @@ alembic>=1.13
 python-dotenv>=1.0
 
 # -----------------------------------------------------------------------------
-# QR code generation (SVG in the server, no JS dependency)
+# QR code generation (SVG on the server, no JS dependency)
 # -----------------------------------------------------------------------------
 qrcode>=7.4
 
