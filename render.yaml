@@ -1,0 +1,149 @@
+# render.yaml
+#
+# Blueprint for Render. Defines three resources:
+#   1. gateway-app     — Web Service (API + UI)
+#   2. gateway-worker  — Background Worker (polling, deploy, webhooks, rates)
+#   3. gateway-db      — PostgreSQL database
+#
+# Variables marked with `sync: false` are NOT stored in this file.
+# You will be asked to provide them once in the Render dashboard.
+#
+# Variables marked with `fromDatabase` are automatically injected by Render
+# from the linked database.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  # ---------------------------------------------------------------------------
+  # Web Service: serves the API, the dashboard and the public payment UI.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: gateway-app
+    runtime: python
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Database: injected automatically by Render from the linked Postgres.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gateway-db
+          property: connectionString
+
+      # Network
+      - key: RPC_URL
+        sync: false
+      - key: CHAIN_ID
+        value: "10143"
+      - key: CHAIN_NAME
+        value: "monad-testnet"
+      - key: CHAIN_EXPLORER
+        value: "https://testnet.monadvision.com"
+      - key: CHAIN_CONFIRMATIONS
+        value: "1"
+
+      # Contracts (filled after running scripts/deploy_contracts.py)
+      - key: FACTORY_ADDRESS
+        sync: false
+      - key: MASTER_ADDRESS
+        sync: false
+
+      # Gateway wallet (pays gas to deploy each proxy)
+      - key: PRIVATE_KEY
+        sync: false
+
+      # Sessions
+      - key: SESSION_SECRET
+        sync: false
+
+      # Quotas and limits
+      - key: DAILY_DEPLOY_QUOTA
+        value: "100"
+      - key: MIN_GATEWAY_BALANCE_WEI
+        value: "50000000000000000"
+
+      # CoinGecko (optional)
+      - key: COINGECKO_API_KEY
+        sync: false
+
+      # Python version
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+      # Logging
+      - key: LOG_LEVEL
+        value: "INFO"
+
+  # ---------------------------------------------------------------------------
+  # Background Worker: processes payments, deploys proxies, sends webhooks,
+  # refreshes exchange rates.
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: gateway-worker
+    runtime: python
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.worker.main
+    envVars:
+      # Same database as the web service.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gateway-db
+          property: connectionString
+
+      # Network (same values as the web service).
+      - key: RPC_URL
+        sync: false
+      - key: CHAIN_ID
+        value: "10143"
+      - key: CHAIN_NAME
+        value: "monad-testnet"
+      - key: CHAIN_EXPLORER
+        value: "https://testnet.monadvision.com"
+      - key: CHAIN_CONFIRMATIONS
+        value: "1"
+
+      # Contracts
+      - key: FACTORY_ADDRESS
+        sync: false
+      - key: MASTER_ADDRESS
+        sync: false
+
+      # Wallet
+      - key: PRIVATE_KEY
+        sync: false
+
+      # Quotas
+      - key: DAILY_DEPLOY_QUOTA
+        value: "100"
+      - key: MIN_GATEWAY_BALANCE_WEI
+        value: "50000000000000000"
+
+      # CoinGecko
+      - key: COINGECKO_API_KEY
+        sync: false
+
+      # Python version
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+      # Logging
+      - key: LOG_LEVEL
+        value: "INFO"
+
+# ---------------------------------------------------------------------------
+# PostgreSQL database
+# ---------------------------------------------------------------------------
+databases:
+  - name: gateway-db
+    databaseName: gateway
+    user: gateway
+    plan: free
+    region: oregon
