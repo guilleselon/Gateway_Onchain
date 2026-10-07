@@ -1,11 +1,5 @@
 """
 Gateway HTTP routes.
-
-- Public landing page.
-- Internal API for merchants (X-API-Key).
-- Public payment UI.
-- Merchant login and dashboard.
-- Health check.
 """
 
 import hmac
@@ -51,6 +45,7 @@ log = setup_logging("gateway_app")
 def _payment_to_dict(p: Payment) -> dict:
     return {
         "payment_id": p.id,
+        "public_token": p.public_token,
         "external_ref": p.external_ref,
         "merchant_name": p.merchant_name,
         "status": p.status,
@@ -69,6 +64,17 @@ def _payment_to_dict(p: Payment) -> dict:
         "expires_at": p.expires_at.isoformat() if p.expires_at else None,
         "confirmed_at": p.confirmed_at.isoformat() if p.confirmed_at else None,
     }
+
+
+def _get_payment_by_ref(s, payment_ref: str):
+    """
+    Look up a payment by public_token. Falls back to numeric id for
+    backwards compatibility with older URLs.
+    """
+    p = s.query(Payment).filter_by(public_token=payment_ref).first()
+    if p is None and payment_ref.isdigit():
+        p = s.get(Payment, int(payment_ref))
+    return p
 
 
 def _chain_for_token(s, token) -> Chain | None:
@@ -106,30 +112,16 @@ def _derive_webhook_secret(api_key: str) -> str:
 
 def register(app, rt) -> None:
 
-    # -----------------------------------------------------------------------
     # Landing
-    # -----------------------------------------------------------------------
-
     @rt("/", methods=["GET"])
     def home(request: Request):
         return landing_page()
 
-    # -----------------------------------------------------------------------
-    # Health check
-    # -----------------------------------------------------------------------
-
+    # Health
     @rt("/health", methods=["GET"])
     def health():
-        """
-        Health check used by platforms (Render, Railway, VPS monitors) to
-        know if the service is alive.
-
-        Returns 200 if the API can connect to its database.
-        Returns 503 if the database is unreachable.
-        """
         from sqlalchemy import text
         from app.core.db import engine
-
         db_ok = False
         try:
             with engine.connect() as conn:
@@ -137,19 +129,14 @@ def register(app, rt) -> None:
             db_ok = True
         except Exception as e:
             log.error(f"Health check: DB unreachable: {e}")
-
         payload = {
             "status": "ok" if db_ok else "degraded",
             "db": db_ok,
             "ts": datetime.now(timezone.utc).isoformat(),
         }
-        status_code = 200 if db_ok else 503
-        return JSONResponse(payload, status_code=status_code)
+        return JSONResponse(payload, status_code=200 if db_ok else 503)
 
-    # -----------------------------------------------------------------------
     # Login / logout
-    # -----------------------------------------------------------------------
-
     @rt("/login", methods=["GET"])
     def login_get(request: Request):
         if get_current_merchant(request):
@@ -160,13 +147,8 @@ def register(app, rt) -> None:
     async def login_post(request: Request):
         form = await request.form()
         api_key = (form.get("api_key") or "").strip()
-
-        print(f"[LOGIN] POST received, len={len(api_key)} "
-              f"prefix={api_key[:16]!r}")
-
         from app.core.auth import hash_api_key
         h = hash_api_key(api_key) if api_key else ""
-
         from app.core.models import ApiKey
         with get_session() as s:
             all_keys = s.query(ApiKey).all()
@@ -175,22 +157,17 @@ def register(app, rt) -> None:
                 if k.key_hash == h and k.active:
                     match = k
                     break
-
-        print(f"[LOGIN] keys_in_db={len(all_keys)} match={bool(match)}")
-
         if not match:
             return login_page(
                 error=f"Invalid API key. (len={len(api_key)}, "
                       f"keys in DB={len(all_keys)})"
             )
-
         merchant = {
             "id": match.id,
             "name": match.name,
             "fee_bps_default": match.fee_bps_default,
         }
         login_session(request, merchant["id"])
-        print(f"[LOGIN] session created for id={merchant['id']}")
         return RedirectResponse("/dashboard", status_code=302)
 
     @rt("/logout", methods=["GET", "POST"])
@@ -198,16 +175,12 @@ def register(app, rt) -> None:
         logout_session(request)
         return RedirectResponse("/login", status_code=302)
 
-    # -----------------------------------------------------------------------
     # Dashboard
-    # -----------------------------------------------------------------------
-
     @rt("/dashboard", methods=["GET"])
     def dashboard(request: Request):
         merchant = get_current_merchant(request)
         if not merchant:
             return RedirectResponse("/login", status_code=302)
-
         with get_session() as s:
             payments_list = (
                 s.query(Payment)
@@ -216,22 +189,17 @@ def register(app, rt) -> None:
                 .all()
             )
             total = len(payments_list)
-            confirmed = sum(
-                1 for p in payments_list
-                if p.status in PaymentStatus.TERMINAL_OK
-            )
-            pending = sum(
-                1 for p in payments_list
-                if p.status in (PaymentStatus.PENDING,
-                                PaymentStatus.USER_CLAIMED,
-                                PaymentStatus.DETECTED,
-                                PaymentStatus.DEPLOYING)
-            )
+            confirmed = sum(1 for p in payments_list
+                            if p.status in PaymentStatus.TERMINAL_OK)
+            pending = sum(1 for p in payments_list
+                          if p.status in (PaymentStatus.PENDING,
+                                          PaymentStatus.USER_CLAIMED,
+                                          PaymentStatus.DETECTED,
+                                          PaymentStatus.DEPLOYING))
             usd_received = sum(
                 (p.amount_usd_cents_received or 0) for p in payments_list
                 if p.status in PaymentStatus.TERMINAL_OK
             ) / 100
-
         stats = {
             "total": total,
             "confirmed": confirmed,
@@ -245,7 +213,6 @@ def register(app, rt) -> None:
         merchant = get_current_merchant(request)
         if not merchant:
             return RedirectResponse("/login", status_code=302)
-
         with get_session() as s:
             payments_list = (
                 s.query(Payment)
@@ -261,7 +228,6 @@ def register(app, rt) -> None:
         merchant = get_current_merchant(request)
         if not merchant:
             return RedirectResponse("/login", status_code=302)
-
         with get_session() as s:
             p = payments.get_payment(s, payment_id)
             if not p or p.api_key_id != merchant["id"]:
@@ -277,10 +243,7 @@ def register(app, rt) -> None:
             return RedirectResponse("/login", status_code=302)
         return dashboard_settings(merchant)
 
-    # -----------------------------------------------------------------------
-    # Internal API
-    # -----------------------------------------------------------------------
-
+    # API
     @rt("/api/payments", methods=["POST"])
     async def api_create_payment(request: Request):
         api_key = request.headers.get("x-api-key")
@@ -288,11 +251,8 @@ def register(app, rt) -> None:
         if not merchant:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
 
-        # Rate limiting: 60 requests per minute per API key
         if not check_rate_limit(merchant["id"]):
-            log.warning(
-                f"Rate limit exceeded for api_key_id={merchant['id']}"
-            )
+            log.warning(f"Rate limit exceeded for api_key_id={merchant['id']}")
             return JSONResponse(
                 {"error": "rate limit exceeded. Max 60 payments per minute."},
                 status_code=429,
@@ -364,7 +324,10 @@ def register(app, rt) -> None:
                     api_key_id=merchant["id"],
                     merchant_name=merchant_name,
                 )
+                payments.ensure_public_token(s, p)
                 result = _payment_to_dict(p)
+                base_url = str(request.base_url).rstrip("/")
+                result["pay_url"] = f"{base_url}/pay/{p.public_token}"
         except payments.PaymentError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         except Exception as e:
@@ -379,34 +342,31 @@ def register(app, rt) -> None:
         merchant = authenticate_api_key(api_key)
         if not merchant:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-
         with get_session() as s:
             p = payments.get_payment(s, payment_id)
             if not p or p.api_key_id != merchant["id"]:
                 return JSONResponse({"error": "not found"}, status_code=404)
             return JSONResponse(_payment_to_dict(p))
 
-    # -----------------------------------------------------------------------
-    # Public payment UI
-    # -----------------------------------------------------------------------
-
-    @rt("/pay/{payment_id}", methods=["GET"])
-    def pay_page(request: Request, payment_id: int):
+    # Public payment UI (uses public_token or numeric id)
+    @rt("/pay/{payment_ref}", methods=["GET"])
+    def pay_page(request: Request, payment_ref: str):
         with get_session() as s:
-            p = payments.get_payment(s, payment_id)
+            p = _get_payment_by_ref(s, payment_ref)
             if not p:
                 return error_layout("The link is invalid or the payment was removed.")
             token = s.get(Token, p.token_id)
             if not token:
                 return error_layout("Payment data is incomplete.")
             chain = _chain_for_token(s, token)
+            payments.ensure_public_token(s, p)
             merchant_dict = {"name": p.merchant_name or "Gateway"}
             return payment_layout(p, token, chain, merchant_dict)
 
-    @rt("/pay/{payment_id}/qr", methods=["GET"])
-    def pay_qr(request: Request, payment_id: int):
+    @rt("/pay/{payment_ref}/qr", methods=["GET"])
+    def pay_qr(request: Request, payment_ref: str):
         with get_session() as s:
-            p = payments.get_payment(s, payment_id)
+            p = _get_payment_by_ref(s, payment_ref)
             if not p:
                 return Response("", status_code=404)
             token = s.get(Token, p.token_id)
@@ -420,21 +380,21 @@ def register(app, rt) -> None:
                 explorer_url=getattr(chain, "explorer_url", None) if chain else None,
             )
 
-    @rt("/pay/{payment_id}/status", methods=["GET"])
-    def pay_status(request: Request, payment_id: int):
+    @rt("/pay/{payment_ref}/status", methods=["GET"])
+    def pay_status(request: Request, payment_ref: str):
         with get_session() as s:
-            p = payments.get_payment(s, payment_id)
+            p = _get_payment_by_ref(s, payment_ref)
             if not p:
                 return Response("", status_code=404)
             return status_fragment(p)
 
-    @rt("/pay/{payment_id}/sent", methods=["POST"])
-    def pay_sent(request: Request, payment_id: int):
+    @rt("/pay/{payment_ref}/sent", methods=["POST"])
+    def pay_sent(request: Request, payment_ref: str):
         with get_session() as s:
-            p = payments.get_payment(s, payment_id)
+            p = _get_payment_by_ref(s, payment_ref)
             if not p:
                 return Response("", status_code=404)
             if p.status in (PaymentStatus.PENDING, PaymentStatus.USER_CLAIMED):
                 payments.mark_user_claimed(s, p)
-                p = payments.get_payment(s, payment_id)
+                p = _get_payment_by_ref(s, payment_ref)
             return status_fragment(p)
