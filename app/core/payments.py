@@ -9,7 +9,12 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.config import get_factory_contract, get_web3, setup_logging
+from app.config import (
+    PRIVATE_KEY,
+    get_factory_contract,
+    get_web3,
+    setup_logging,
+)
 from app.core import blockchain, rates
 from app.core.models import Chain, Payment, PaymentStatus, Token
 
@@ -126,6 +131,12 @@ def create_payment(
     If `external_ref` is empty/None, a random one is generated
     ('auto-<24 hex>'). If the merchant provides one, it is kept and
     idempotency per (api_key_id, external_ref) applies.
+
+    The proxy address is computed by simulating factory.create() with the
+    SAME msg.sender that will later send the real deploy tx (the gateway
+    wallet). This is critical: the factory computes
+        actual_salt = keccak256(abi_encode(msg.sender, _salt))
+    so a different `from` produces a different proxy address.
     """
     # Autogenerate external_ref if not provided
     if not external_ref:
@@ -169,13 +180,11 @@ def create_payment(
     salt = _generate_salt()
     public_token = _generate_public_token()
 
-        w3 = get_web3(chain.rpc_url)
+    w3 = get_web3(chain.rpc_url)
     factory = get_factory_contract(w3, chain.factory_address)
 
-    # The factory computes actual_salt = keccak256(abi_encode(msg.sender, salt)),
-    # so the address depends on who sends the tx. Use the gateway wallet,
-    # which is the one that will actually call factory.create() later.
-    from app.config import PRIVATE_KEY
+    # The factory computes actual_salt = keccak256(abi_encode(msg.sender, salt)).
+    # Simulate with the same sender that will send the real deploy tx.
     gateway_account = w3.eth.account.from_key(PRIVATE_KEY)
 
     try:
@@ -185,6 +194,9 @@ def create_payment(
         )
     except Exception as e:
         raise PaymentError(f"could not compute proxy: {e}") from e
+
+    amount_token_suggested = _calculate_amount_token(
+        amount_usd_cents, rate.usd_rate, token.decimals,
     )
 
     now = _utcnow()
@@ -215,7 +227,8 @@ def create_payment(
         f"Payment created id={payment.id} public_token={public_token[:8]}... "
         f"external_ref={external_ref} "
         f"merchant={merchant_name or '(unnamed)'} token={token.symbol} "
-        f"usd_cents={amount_usd_cents} proxy={proxy_address}"
+        f"usd_cents={amount_usd_cents} proxy={proxy_address} "
+        f"sender={gateway_account.address}"
     )
     return payment
 
