@@ -362,8 +362,8 @@ _JS = """
 
 app, rt = fast_app(
     pico=False,
+    Title("Onchain Gateway"),
     hdrs=(
-        Title("Onchain Gateway"),
         Link(
             rel="icon",
             href=(
