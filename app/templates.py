@@ -7,7 +7,7 @@ import io
 import qrcode
 import qrcode.image.svg
 from fasthtml.common import (
-    A, Button, Code, Div, Form, H1, H2, H3, Input, Label, Main, NotStr,
+    A, Button, Code, Div, Form, H1, H2, H3, I, Input, Label, Main, NotStr,
     P, Span, Title,
 )
 
