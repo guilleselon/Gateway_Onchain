@@ -120,32 +120,38 @@ def _status_widget(payment) -> Div:
 
 def _SuccessStatus(payment, token, explorer_url: str | None) -> Div:
     tx = payment.tx_hash or ""
+    # Normalize to 0x-prefixed
+    if tx and not tx.startswith("0x"):
+        tx = "0x" + tx
     short_hash = (tx[:10] + "..." + tx[-8:]) if len(tx) > 20 else tx
     children = [
-        Div("✓", cls="center", style="font-size:2rem;color:var(--ok);"),
-        H3("Payment received!", cls="center mt-1",
-           style="font-size:1.2rem;font-weight:800;"),
-        P("Thanks for your payment",
-          cls="center", style="color:var(--muted);font-size:0.9rem;"),
+        Div(
+            I(cls="fa-solid fa-check text-emerald-600 text-3xl"),
+            cls="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center mb-4 mx-auto",
+        ),
+        H3("Payment received!", cls="text-xl font-extrabold text-gray-900 text-center"),
+        P("Thank you for your payment",
+          cls="text-gray-500 text-sm mt-1 text-center"),
     ]
     if short_hash:
         children.append(
             Div(
-                Span("TX ", style="color:var(--muted);font-size:0.7rem;"),
-                Span(short_hash, cls="mono",
-                     style="color:var(--primary);font-size:0.8rem;font-weight:600;"),
-                cls="center mt-2",
+                Span("TX ", cls="text-gray-400 text-[10px]"),
+                Span(short_hash, cls="text-xs font-mono text-[#836EF9] font-semibold"),
+                cls="bg-gray-50 rounded-lg px-3 py-2 inline-block mt-4",
             )
         )
     if explorer_url and tx:
         children.append(
-            A("View on explorer →",
-              href=f"{explorer_url}/tx/{tx}",
-              target="_blank",
-              cls="center mt-2",
-              style="display:block;font-size:0.85rem;"),
+            A(
+                I(cls="fa-solid fa-arrow-up-right-from-square mr-1 text-xs"),
+                "View on explorer",
+                href=f"{explorer_url.rstrip('/')}/tx/{tx}",
+                target="_blank",
+                cls="block mt-4 text-[#836EF9] text-xs font-semibold hover:underline text-center",
+            )
         )
-    return Div(*children, id="payment-status")
+    return Div(*children, id="payment-status", cls="text-center animate-in")
 
 
 def _ErrorStatus(payment) -> Div:
