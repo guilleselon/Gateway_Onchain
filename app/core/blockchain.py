@@ -29,6 +29,27 @@ log = setup_logging("gateway_blockchain")
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _to_0x(value) -> str:
+    """
+    Return a 0x-prefixed hex string.
+
+    web3.py v7 returns HexBytes for hashes. `HexBytes.hex()` may or may
+    not include the 0x prefix depending on the version. This helper
+    normalizes it to always include 0x.
+    """
+    if hasattr(value, "to_0x_hex"):
+        return value.to_0x_hex()
+    if hasattr(value, "hex"):
+        h = value.hex()
+        return h if h.startswith("0x") else "0x" + h
+    s = str(value)
+    return s if s.startswith("0x") else "0x" + s
+
+
+# ---------------------------------------------------------------------------
 # Address calculation and deployment
 # ---------------------------------------------------------------------------
 
@@ -73,17 +94,8 @@ def deploy_proxy(w3: Web3, factory_contract, order_id: int,
     The nonce is managed by app.core.nonce so multiple transactions can
     be sent in the same cycle without waiting for confirmations.
 
-    Args:
-        w3: Web3 instance.
-        factory_contract: factory contract.
-        order_id: uint256.
-        processor: destination address.
-        salt_hex: bytes32 in hex.
-        private_key: gateway private key (with 0x prefix).
-        gas_limit: gas limit. 500k is comfortable for a minimal proxy.
-
     Returns:
-        Transaction hash as a hex string.
+        Transaction hash as a 0x-prefixed hex string.
     """
     from app.core import nonce as nonce_manager
 
@@ -105,8 +117,9 @@ def deploy_proxy(w3: Web3, factory_contract, order_id: int,
 
     signed = w3.eth.account.sign_transaction(tx, private_key=private_key)
     tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-    log.info(f"Proxy deploy tx sent. nonce={nonce} tx={tx_hash.hex()}")
-    return tx_hash.hex()
+    tx_hash_hex = _to_0x(tx_hash)
+    log.info(f"Proxy deploy tx sent. nonce={nonce} tx={tx_hash_hex}")
+    return tx_hash_hex
 
 
 def wait_for_confirmations(w3: Web3, tx_hash_hex: str,
@@ -157,21 +170,14 @@ def get_paid_events(w3: Web3, from_block: int, to_block: int | str,
       - payer    (address, indexed)
       - amount   (uint256, not indexed)
 
-    Args:
-        w3: Web3 instance.
-        from_block: starting block.
-        to_block: ending block, or 'latest'.
-        proxy_addresses: optional list to filter by proxy address.
-
     Returns:
-        List of dicts with tx_hash, log_index, block_number, proxy,
-        order_id, payer, amount.
+        List of dicts with tx_hash (0x-prefixed), log_index, block_number,
+        proxy, order_id, payer, amount.
     """
     if not FORWARDED_ABI:
         log.warning("FORWARDED_ABI is empty; cannot search events.")
         return []
 
-    # Generic instance used only for event decoding
     forwarded = w3.eth.contract(abi=FORWARDED_ABI)
 
     event_filter = {
@@ -191,7 +197,7 @@ def get_paid_events(w3: Web3, from_block: int, to_block: int | str,
         try:
             decoded = forwarded.events.Paid().process_log(entry)
             events.append({
-                "tx_hash": decoded["transactionHash"].hex(),
+                "tx_hash": _to_0x(decoded["transactionHash"]),
                 "log_index": decoded["logIndex"],
                 "block_number": decoded["blockNumber"],
                 "proxy": decoded["address"],
@@ -217,4 +223,3 @@ def _hex_to_bytes32(salt_hex: str) -> bytes:
     if len(s) != 64:
         raise ValueError(f"Salt must be 32 bytes (64 hex chars), got {len(s)}")
     return bytes.fromhex(s)
-
