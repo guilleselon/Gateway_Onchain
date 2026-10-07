@@ -31,4 +31,3 @@ def run_once() -> int:
                     processed += 1
                     log.info(f"payment {p.id}: {previous} -> {p.status}")
     return processed
-
