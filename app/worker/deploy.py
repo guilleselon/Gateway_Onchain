@@ -9,7 +9,9 @@ Two phases per cycle:
    are sent in the same cycle.
 
 2. Confirm phase: for every deploying payment, check if its deploy tx
-   has been confirmed. If so, mark it as confirmed (or failed).
+   has been confirmed, verify the proxy was actually deployed at the
+   expected address, and that the balance was forwarded to the merchant.
+   Only then mark it as confirmed.
 """
 
 from app.config import (
@@ -44,7 +46,6 @@ def _send_phase(session) -> int:
     if not pending:
         return 0
 
-    # Balance check (once per cycle)
     first_token = session.get(Token, pending[0].token_id)
     first_chain = session.get(Chain, first_token.chain_id) if first_token else None
     if first_chain:
@@ -66,7 +67,6 @@ def _send_phase(session) -> int:
             log.warning(f"payment {p.id}: incomplete data, skipping")
             continue
 
-        # Daily quota per merchant
         if p.api_key_id is not None:
             confirmed_today = payments.count_confirmed_today(session, p.api_key_id)
             if confirmed_today >= DAILY_DEPLOY_QUOTA:
@@ -102,7 +102,16 @@ def _send_phase(session) -> int:
 # ---------------------------------------------------------------------------
 
 def _confirm_phase(session) -> int:
-    """Check deploying payments for confirmations. Returns how many confirmed."""
+    """
+    Check deploying payments for confirmations.
+
+    Beyond checking receipt.status == 1, verifies:
+      1. The proxy at payment.proxy_address actually has code.
+      2. The proxy's balance is 0 (funds were forwarded).
+
+    If either check fails, marks the payment as FAILED with a clear reason
+    instead of falsely reporting CONFIRMED.
+    """
     deploying = (
         session.query(Payment)
         .filter(Payment.status == PaymentStatus.DEPLOYING)
@@ -127,19 +136,63 @@ def _confirm_phase(session) -> int:
             receipt = None
 
         if receipt is None:
-            # Still pending; check again next cycle
             continue
 
-        if receipt.status == 1:
-            payments.mark_confirmed(
-                session, p, p.deploy_tx_hash, receipt.blockNumber
-            )
-            confirmed += 1
-            log.info(
-                f"payment {p.id}: confirmed in block {receipt.blockNumber}"
-            )
-        else:
+        if receipt.status != 1:
             payments.mark_failed(session, p, "deploy tx reverted")
+            continue
+
+        # --- Post-deploy verification ---
+
+        # 1. Does the expected proxy address actually have code?
+        try:
+            proxy_has_code = blockchain.has_code(w3, p.proxy_address)
+        except Exception as e:
+            log.warning(
+                f"payment {p.id}: could not check proxy code: {e}"
+            )
+            continue
+
+        if not proxy_has_code:
+            payments.mark_failed(
+                session, p,
+                f"deploy tx succeeded but no code at expected proxy "
+                f"{p.proxy_address} (CREATE2 address mismatch — "
+                f"check that calculate_proxy uses the same msg.sender)"
+            )
+            log.error(
+                f"payment {p.id}: CREATE2 MISMATCH. Expected proxy at "
+                f"{p.proxy_address} but the factory deployed elsewhere. "
+                f"User funds may be trapped in {p.proxy_address}."
+            )
+            continue
+
+        # 2. Was the balance forwarded to the merchant?
+        try:
+            remaining = blockchain.get_balance(w3, p.proxy_address)
+        except Exception as e:
+            log.warning(
+                f"payment {p.id}: could not read proxy balance: {e}"
+            )
+            continue
+
+        if remaining > 0:
+            log.warning(
+                f"payment {p.id}: proxy {p.proxy_address} still holds "
+                f"{remaining} wei after initialize. Not marking as confirmed."
+            )
+            # Leave it in DEPLOYING so it gets re-checked. If it stays
+            # stuck, an operator must intervene.
+            continue
+
+        payments.mark_confirmed(
+            session, p, p.deploy_tx_hash, receipt.blockNumber
+        )
+        confirmed += 1
+        log.info(
+            f"payment {p.id}: confirmed in block {receipt.blockNumber} "
+            f"(proxy {p.proxy_address} empty)"
+        )
 
     return confirmed
 
@@ -149,10 +202,7 @@ def _confirm_phase(session) -> int:
 # ---------------------------------------------------------------------------
 
 def run_once() -> int:
-    """
-    Run one deploy cycle. Returns the total number of payments that
-    moved forward (sent + confirmed).
-    """
+    """Run one deploy cycle. Returns payments that moved forward."""
     with get_session() as s:
         sent = _send_phase(s)
         confirmed = _confirm_phase(s)
