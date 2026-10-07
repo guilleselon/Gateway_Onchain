@@ -456,6 +456,50 @@ def dashboard_payment_detail(merchant: dict, payment, token, chain) -> Main:
         return Div(Span(k, cls="key"), Span(str(v), cls="val mono"),
                    cls="row-between")
 
+    def _tx_row(label: str, tx_hash: str | None):
+        """
+        Row for a transaction hash: clickable link to the explorer (if
+        available) + copy button. Falls back to plain text if no explorer.
+        """
+        if not tx_hash:
+            return row(label, "—")
+
+        tx = tx_hash if tx_hash.startswith("0x") else "0x" + tx_hash
+        explorer = getattr(chain, "explorer_url", None) if chain else None
+
+        if explorer:
+            tx_el = A(
+                tx,
+                href=f"{explorer.rstrip('/')}/tx/{tx}",
+                target="_blank",
+                rel="noopener",
+                cls="mono",
+                style=(
+                    "color:var(--primary);word-break:break-all;"
+                    "text-align:right;"
+                ),
+            )
+        else:
+            tx_el = Span(tx, cls="mono", style="word-break:break-all;")
+
+        return Div(
+            Span(label, cls="key"),
+            Div(
+                tx_el,
+                Button(
+                    "⧉",
+                    cls="btn-copy mono",
+                    **{"data-copy": tx},
+                    title="Copy transaction hash",
+                ),
+                style=(
+                    "display:flex;gap:0.5rem;align-items:center;"
+                    "justify-content:flex-end;max-width:70%;"
+                ),
+            ),
+            cls="row-between",
+        )
+
     ref = payment.public_token or str(payment.id)
     content = Div(
         A("← Back to payments", href="/dashboard/payments",
@@ -476,7 +520,12 @@ def dashboard_payment_detail(merchant: dict, payment, token, chain) -> Main:
                 f"${(payment.amount_usd_cents_expected or 0) / 100:.2f}"),
             row("Amount received",
                 f"${(payment.amount_usd_cents_received or 0) / 100:.2f}"),
-            row("Tx hash", payment.tx_hash or "—"),
+            row("Rate used",
+                str(payment.rate_used) if payment.rate_used else "—"),
+            row("Rate source", payment.rate_source or "—"),
+            _tx_row("Deploy tx", payment.deploy_tx_hash),
+            _tx_row("Payment tx", payment.tx_hash),
+            row("Block", payment.block_number or "—"),
             row("Created", payment.created_at.strftime("%Y-%m-%d %H:%M:%S")),
             row("Confirmed",
                 payment.confirmed_at.strftime("%Y-%m-%d %H:%M:%S")
