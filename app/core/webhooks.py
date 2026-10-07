@@ -89,6 +89,7 @@ def build_payload(payment: Payment, token: Token,
             if payment.amount_token_received else None
         ),
         "amount_usd_cents_received": payment.amount_usd_cents_received,
+        "amount_usd_micros_received": payment.amount_usd_micros_received,
         "rate_used": str(payment.rate_used) if payment.rate_used else None,
         "rate_source": payment.rate_source,
         "wallet_address": payment.wallet_address,
@@ -221,4 +222,3 @@ def is_url_blocked(session: Session, webhook_url: str) -> bool:
         .count()
     )
     return failed >= WEBHOOK_MAX_FAILURES
-
