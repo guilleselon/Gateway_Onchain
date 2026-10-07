@@ -62,6 +62,7 @@ def _payment_to_dict(p: Payment, session=None) -> dict:
         "amount_token_suggested": p.amount_token_suggested,
         "amount_token_received": p.amount_token_received,
         "amount_usd_cents_received": p.amount_usd_cents_received,
+        "amount_usd_micros_received": p.amount_usd_micros_received,
         "rate_used": str(p.rate_used) if p.rate_used else None,
         "rate_source": p.rate_source,
         "rate_fetched_at": (
@@ -74,7 +75,6 @@ def _payment_to_dict(p: Payment, session=None) -> dict:
         "confirmed_at": p.confirmed_at.isoformat() if p.confirmed_at else None,
     }
 
-    # Current token price (latest stored rate)
     if session is not None and p.token_id:
         latest = rates_module.get_latest_rate(session, p.token_id)
         if latest is not None:
@@ -92,10 +92,6 @@ def _payment_to_dict(p: Payment, session=None) -> dict:
 
 
 def _get_payment_by_ref(s, payment_ref: str):
-    """
-    Look up a payment by public_token. Falls back to numeric id for
-    backwards compatibility with older URLs.
-    """
     p = s.query(Payment).filter_by(public_token=payment_ref).first()
     if p is None and payment_ref.isdigit():
         p = s.get(Payment, int(payment_ref))
@@ -288,7 +284,7 @@ def register(app, rt) -> None:
         except Exception:
             return JSONResponse({"error": "invalid json"}, status_code=400)
 
-        external_ref = body.get("external_ref")   # opcional; se autogenera si falta
+        external_ref = body.get("external_ref")
         amount_usd_cents = body.get("amount_usd_cents")
         token_id = body.get("token_id")
         wallet_raw = body.get("wallet_address")
