@@ -157,4 +157,3 @@ def run_once() -> int:
         sent = _send_phase(s)
         confirmed = _confirm_phase(s)
         return sent + confirmed
-
