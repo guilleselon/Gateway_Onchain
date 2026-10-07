@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fasthtml.common import Script, Style, fast_app
+from fasthtml.common import Link, Script, Style, Title, fast_app
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import RPC_URL, SESSION_SECRET, setup_logging
