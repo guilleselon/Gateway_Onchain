@@ -71,6 +71,35 @@ def _calculate_amount_token(amount_usd_cents: int, usd_rate: Decimal,
     return int(amount_token_dec * Decimal(10 ** decimals))
 
 
+def _ensure_rate(session: Session, token: Token):
+    """
+    Return the latest rate for a token. If there is none, try to fetch
+    one on demand from any configured provider (CMC first, CoinGecko as
+    fallback) and store it.
+
+    This is a fallback for cases where the worker is sleeping (Render
+    free tier) or the token was just added and no cycle has run yet.
+    """
+    rate = rates.get_latest_rate(session, token.id)
+    if rate is not None:
+        return rate
+
+    log.info(
+        f"No rate stored for {token.symbol}; fetching on demand..."
+    )
+    try:
+        usd_rate, source = rates.fetch_rate(token)
+    except Exception as e:
+        raise PaymentError(
+            f"no rate stored for {token.symbol} and could not fetch one "
+            f"from any provider: {e}"
+        ) from e
+
+    rate = rates.save_rate(session, token.id, usd_rate, source)
+    log.info(f"Rate fetched on demand: {token.symbol} = {usd_rate} USD ({source})")
+    return rate
+
+
 # ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------
@@ -96,10 +125,11 @@ def create_payment(
     Steps:
       1. Idempotency check.
       2. Validate token and chain.
-      3. Generate unique order_id and salt.
-      4. Compute the proxy address pointing to wallet_address.
-      5. Compute amount_token_suggested with the latest rate.
-      6. Store the Payment with status=pending and expires_at.
+      3. Ensure a USD rate exists (fetch on demand if needed).
+      4. Generate unique order_id and salt.
+      5. Compute the proxy address pointing to wallet_address.
+      6. Compute amount_token_suggested.
+      7. Store the Payment with status=pending and expires_at.
 
     Args:
         session: SQLAlchemy session.
@@ -153,13 +183,8 @@ def create_payment(
     if not chain or not chain.active:
         raise PaymentError(f"chain {token.chain_id} does not exist or is inactive")
 
-    # --- Latest rate (required to suggest the amount) ---
-    rate = rates.get_latest_rate(session, token.id)
-    if not rate:
-        raise PaymentError(
-            f"no rate stored for {token.symbol}. "
-            f"Run rates.update_all_rates() first."
-        )
+    # --- Ensure a rate exists (fetch on demand if needed) ---
+    rate = _ensure_rate(session, token)
 
     # --- Generate unique contract identifiers ---
     order_id = _generate_order_id()
