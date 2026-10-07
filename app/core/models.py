@@ -37,19 +37,6 @@ def utcnow() -> datetime:
 
 # --- Payment statuses ---
 class PaymentStatus:
-    """
-    Payment state machine values.
-
-    Transitions:
-        pending       -> user_claimed  (user pressed "I paid")
-        pending       -> expired       (TTL elapsed without funds)
-        user_claimed  -> detected      (funds detected in proxy)
-        pending       -> detected      (funds detected before user claim)
-        detected      -> deploying     (deployment tx sent)
-        deploying     -> confirmed     (proxy deployed and event emitted)
-        deploying     -> failed        (deployment failed)
-        expired       -> late_detected (funds arrived after TTL)
-    """
     PENDING = "pending"
     USER_CLAIMED = "user_claimed"
     DETECTED = "detected"
@@ -69,13 +56,6 @@ class PaymentStatus:
 
 # --- ApiKey ---
 class ApiKey(Base):
-    """
-    API key issued to a merchant.
-
-    The merchant sends it in the X-API-Key header on every POST /api/payments.
-    Only the SHA-256 hash is stored; the plain value is shown once at creation.
-    A short preview is stored to identify keys in listings.
-    """
     __tablename__ = "api_keys"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -90,9 +70,6 @@ class ApiKey(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-
-    def __repr__(self) -> str:
-        return f"<ApiKey id={self.id} name={self.name!r} active={self.active}>"
 
 
 # --- Chain ---
@@ -111,9 +88,6 @@ class Chain(Base):
     )
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    def __repr__(self) -> str:
-        return f"<Chain id={self.id} name={self.name!r} chain_id={self.chain_id}>"
-
 
 # --- Token ---
 class Token(Base):
@@ -130,9 +104,6 @@ class Token(Base):
     coingecko_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    def __repr__(self) -> str:
-        return f"<Token id={self.id} symbol={self.symbol!r}>"
-
 
 # --- ExchangeRate ---
 class ExchangeRate(Base):
@@ -146,9 +117,6 @@ class ExchangeRate(Base):
         DateTime(timezone=True), default=utcnow, nullable=False
     )
 
-    def __repr__(self) -> str:
-        return f"<ExchangeRate token_id={self.token_id} rate={self.usd_rate}>"
-
 
 # --- Payment ---
 class Payment(Base):
@@ -158,9 +126,18 @@ class Payment(Base):
         Index("ix_payments_api_key_id", "api_key_id"),
         Index("ix_payments_created_at", "created_at"),
         Index("ix_payments_deploy_tx", "deploy_tx_hash"),
+        Index("ix_payments_public_token", "public_token", unique=True),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Public, non-guessable token used in the customer-facing URL.
+    # Nullable for backwards compatibility with rows created before
+    # this column existed; new payments always get one.
+    public_token: Mapped[str | None] = mapped_column(
+        String(40), nullable=True
+    )
+
     api_key_id: Mapped[int | None] = mapped_column(
         ForeignKey("api_keys.id"), nullable=True
     )
@@ -174,7 +151,6 @@ class Payment(Base):
     amount_usd_cents_expected: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
     )
-    # Token amounts stored as strings to avoid SQLite 64-bit overflow.
     amount_token_suggested: Mapped[str | None] = mapped_column(
         String(80), nullable=True
     )
@@ -236,12 +212,6 @@ class Payment(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    def __repr__(self) -> str:
-        return (
-            f"<Payment id={self.id} external_ref={self.external_ref!r} "
-            f"status={self.status!r}>"
-        )
-
 
 # --- PaymentEvent ---
 class PaymentEvent(Base):
@@ -263,12 +233,6 @@ class PaymentEvent(Base):
         DateTime(timezone=True), default=utcnow, nullable=False
     )
 
-    def __repr__(self) -> str:
-        return (
-            f"<PaymentEvent tx={self.tx_hash[:10]}... "
-            f"log_index={self.log_index}>"
-        )
-
 
 # --- WebhookAttempt ---
 class WebhookAttempt(Base):
@@ -285,10 +249,3 @@ class WebhookAttempt(Base):
     attempted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
-
-    def __repr__(self) -> str:
-        return (
-            f"<WebhookAttempt payment_id={self.payment_id} "
-            f"n={self.attempt_number} success={self.success}>"
-        )
-
