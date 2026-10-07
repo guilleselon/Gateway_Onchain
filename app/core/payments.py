@@ -45,6 +45,11 @@ def _generate_public_token() -> str:
     return secrets.token_urlsafe(24)
 
 
+def _generate_external_ref() -> str:
+    """Random external_ref for merchants that don't send one."""
+    return "auto-" + secrets.token_hex(12)
+
+
 def _calculate_amount_token(amount_usd_cents: int, usd_rate: Decimal,
                             decimals: int) -> int:
     if usd_rate <= 0:
@@ -106,7 +111,7 @@ def get_payment_by_public_token(session: Session,
 
 def create_payment(
     session: Session,
-    external_ref: str,
+    external_ref: str | None,
     amount_usd_cents: int,
     token_id: int,
     wallet_address: str,
@@ -116,10 +121,18 @@ def create_payment(
     merchant_name: str | None = None,
 ) -> Payment:
     """
-    Create a new payment. Idempotent per (api_key_id, external_ref).
+    Create a new payment.
+
+    If `external_ref` is empty/None, a random one is generated
+    ('auto-<24 hex>'). If the merchant provides one, it is kept and
+    idempotency per (api_key_id, external_ref) applies.
     """
-    # Idempotency
-    if api_key_id is not None and external_ref:
+    # Autogenerate external_ref if not provided
+    if not external_ref:
+        external_ref = _generate_external_ref()
+
+    # Idempotency: only meaningful when the merchant sends its own ref
+    if api_key_id is not None:
         existing = (
             session.query(Payment)
             .filter_by(api_key_id=api_key_id, external_ref=external_ref)
@@ -135,8 +148,6 @@ def create_payment(
     # Validation
     if amount_usd_cents <= 0:
         raise PaymentError("amount_usd_cents must be greater than 0")
-    if not external_ref:
-        raise PaymentError("external_ref is empty")
     if not wallet_address:
         raise PaymentError("wallet_address is empty")
     if not webhook_url:
@@ -361,9 +372,25 @@ def get_payments_to_deploy(session: Session) -> list[Payment]:
 
 
 def get_payments_to_webhook(session: Session) -> list[Payment]:
+    from sqlalchemy import func
+    from app.core.models import WebhookAttempt
+    from app.core.webhooks import MAX_ATTEMPTS
+
+    failed = (
+        session.query(
+            WebhookAttempt.payment_id.label("payment_id"),
+            func.count(WebhookAttempt.id).label("n"),
+        )
+        .filter(WebhookAttempt.success.is_(False))
+        .group_by(WebhookAttempt.payment_id)
+        .subquery()
+    )
+
     return (
         session.query(Payment)
+        .outerjoin(failed, Payment.id == failed.c.payment_id)
         .filter(Payment.status == PaymentStatus.CONFIRMED)
         .filter(Payment.webhook_sent_at.is_(None))
+        .filter(func.coalesce(failed.c.n, 0) < MAX_ATTEMPTS)
         .all()
     )
