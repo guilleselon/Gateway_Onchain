@@ -160,9 +160,15 @@ class Payment(Base):
     amount_token_received: Mapped[str | None] = mapped_column(
         String(80), nullable=True
     )
+    # Cents (integer, 2 decimals). Kept for backwards compatibility.
     amount_usd_cents_received: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
     )
+    # Micro-USD (integer, 6 decimals). Preserves precision for small payments.
+    amount_usd_micros_received: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+
     rate_used: Mapped[Decimal | None] = mapped_column(
         Numeric(30, 10), nullable=True
     )
