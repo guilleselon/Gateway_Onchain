@@ -1,12 +1,5 @@
 """
 FastHTML components for the gateway.
-
-- Public landing page.
-- Public payment UI.
-- Dashboard login.
-- Dashboard: home, payments list, payment detail, settings.
-
-All styles live in the <style> block of app/main.py.
 """
 
 import io
@@ -104,9 +97,10 @@ def _badge(payment) -> Div:
 def _status_widget(payment) -> Div:
     terminal = payment.status in PaymentStatus.TERMINAL
     attrs = {"id": "payment-status", "cls": "center"}
+    ref = payment.public_token or str(payment.id)
     if not terminal:
         attrs.update({
-            "hx_get": f"/pay/{payment.id}/status",
+            "hx_get": f"/pay/{ref}/status",
             "hx_trigger": "every 3s",
             "hx_swap": "outerHTML",
         })
@@ -115,7 +109,7 @@ def _status_widget(payment) -> Div:
         children.append(
             Button(
                 "I have paid",
-                hx_post=f"/pay/{payment.id}/sent",
+                hx_post=f"/pay/{ref}/sent",
                 hx_target="#payment-status",
                 hx_swap="outerHTML",
                 cls="btn btn-outline mt-2",
@@ -190,13 +184,14 @@ def _address_block(proxy_address: str) -> Div:
 
 
 def _SetupContent(payment, token, chain_name: str, chain_id: int) -> Div:
+    ref = payment.public_token or str(payment.id)
     return Div(
         H2("Crypto payment", cls="pay-title"),
         P("Scan the code to send the payment", cls="pay-sub"),
         _WalletCard(token.symbol, chain_name, chain_id),
         Button(
             "Show payment QR",
-            hx_get=f"/pay/{payment.id}/qr",
+            hx_get=f"/pay/{ref}/qr",
             hx_target="#panel-content",
             hx_swap="outerHTML",
             cls="btn btn-primary",
@@ -240,10 +235,8 @@ def status_fragment(payment) -> Div:
         with get_session() as s:
             token = s.get(Token, payment.token_id)
             return _SuccessStatus(payment, token, None)
-
     if payment.status in PaymentStatus.TERMINAL_ERR:
         return _ErrorStatus(payment)
-
     return _status_widget(payment)
 
 
@@ -305,7 +298,6 @@ def login_page(error: str | None = None) -> Main:
                    "border-radius:8px;border:1px solid #c00;"
                    "margin-bottom:1rem;font-size:0.85rem;word-break:break-all;"),
         )
-
     children = []
     if error_block is not None:
         children.append(error_block)
@@ -325,7 +317,6 @@ def login_page(error: str | None = None) -> Main:
           cls="center",
           style="font-size:0.75rem;color:var(--muted);margin-top:1.5rem;")
     )
-
     return Main(
         Div(*children, cls="login-card"),
         Title(title if error else "Sign in · Gateway"),
@@ -355,7 +346,6 @@ def _dash_layout(merchant: dict, content, active: str = "home") -> Main:
         ),
         cls="sidebar",
     )
-
     return Main(
         sidebar,
         Div(content, cls="main"),
@@ -460,6 +450,7 @@ def dashboard_payment_detail(merchant: dict, payment, token, chain) -> Main:
         return Div(Span(k, cls="key"), Span(str(v), cls="val mono"),
                    cls="row-between")
 
+    ref = payment.public_token or str(payment.id)
     content = Div(
         A("← Back to payments", href="/dashboard/payments",
           style="font-size:0.85rem;font-weight:600;"),
@@ -469,6 +460,7 @@ def dashboard_payment_detail(merchant: dict, payment, token, chain) -> Main:
         Div(
             H3("Details"),
             row("Payment ID", payment.id),
+            row("Public token", payment.public_token or "—"),
             row("Token", token.symbol if token else "—"),
             row("Network", chain.name if chain else "—"),
             row("Destination wallet", payment.wallet_address),
@@ -490,7 +482,7 @@ def dashboard_payment_detail(merchant: dict, payment, token, chain) -> Main:
             H3("Payment link"),
             P("Share this link with your customer:",
               style="color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem;"),
-            Div(f"/pay/{payment.id}", cls="code-block"),
+            Div(f"/pay/{ref}", cls="code-block"),
             cls="card",
         ),
     )
@@ -523,4 +515,3 @@ def dashboard_settings(merchant: dict) -> Main:
         ),
     )
     return _dash_layout(merchant, content, active="settings")
-
