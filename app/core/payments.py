@@ -1,15 +1,5 @@
 """
 Payment business logic.
-
-Responsibilities:
-- create_payment(): validate input, compute proxy, store the payment.
-- State transitions: user_claimed, detected, deploying, confirmed, failed.
-- Queries: by id, by external_ref, lists for the worker.
-- Maintenance: expire overdue payments.
-
-Merchant data (wallet, webhook, secret, name) is stored on each Payment,
-not in a separate table. The same API key can be used for multiple
-wallets and URLs.
 """
 
 import os
@@ -26,7 +16,6 @@ from app.core.models import Chain, Payment, PaymentStatus, Token
 log = setup_logging("gateway_payments")
 
 
-# --- Constants ---
 PAYMENT_TTL_MINUTES = 30
 PAYMENT_MONITOR_HOURS = 24
 
@@ -44,26 +33,20 @@ def _utcnow() -> datetime:
 
 
 def _generate_order_id() -> int:
-    """
-    Random uint256, limited to 63 bits so it fits in SQLite
-    (which uses signed 64-bit INTEGER). 2^63 possible values is
-    more than enough to avoid collisions.
-    """
     return secrets.randbits(63)
 
 
 def _generate_salt() -> str:
-    """Random bytes32 in hex, with 0x prefix."""
     return "0x" + os.urandom(32).hex()
+
+
+def _generate_public_token() -> str:
+    """32+ char URL-safe token for the customer-facing payment URL."""
+    return secrets.token_urlsafe(24)
 
 
 def _calculate_amount_token(amount_usd_cents: int, usd_rate: Decimal,
                             decimals: int) -> int:
-    """
-    Convert a USD amount to the token amount.
-
-    Formula: amount_token = amount_usd / usd_rate * 10^decimals
-    """
     if usd_rate <= 0:
         raise PaymentError(f"invalid rate: {usd_rate}")
     amount_usd = Decimal(amount_usd_cents) / Decimal(100)
@@ -72,21 +55,12 @@ def _calculate_amount_token(amount_usd_cents: int, usd_rate: Decimal,
 
 
 def _ensure_rate(session: Session, token: Token):
-    """
-    Return the latest rate for a token. If there is none, try to fetch
-    one on demand from any configured provider (CMC first, CoinGecko as
-    fallback) and store it.
-
-    This is a fallback for cases where the worker is sleeping (Render
-    free tier) or the token was just added and no cycle has run yet.
-    """
+    """Return the latest rate for a token, fetching on demand if needed."""
     rate = rates.get_latest_rate(session, token.id)
     if rate is not None:
         return rate
 
-    log.info(
-        f"No rate stored for {token.symbol}; fetching on demand..."
-    )
+    log.info(f"No rate stored for {token.symbol}; fetching on demand...")
     try:
         usd_rate, source = rates.fetch_rate(token)
     except Exception as e:
@@ -98,6 +72,32 @@ def _ensure_rate(session: Session, token: Token):
     rate = rates.save_rate(session, token.id, usd_rate, source)
     log.info(f"Rate fetched on demand: {token.symbol} = {usd_rate} USD ({source})")
     return rate
+
+
+# ---------------------------------------------------------------------------
+# Public token helpers
+# ---------------------------------------------------------------------------
+
+def ensure_public_token(session: Session, payment: Payment) -> str:
+    """
+    Make sure the payment has a public_token. If it doesn't (older rows),
+    generate one and save it.
+    """
+    if payment.public_token:
+        return payment.public_token
+    payment.public_token = _generate_public_token()
+    session.flush()
+    return payment.public_token
+
+
+def get_payment_by_public_token(session: Session,
+                                public_token: str) -> Payment | None:
+    """Find a payment by its public token (used in the customer URL)."""
+    return (
+        session.query(Payment)
+        .filter_by(public_token=public_token)
+        .first()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -116,39 +116,9 @@ def create_payment(
     merchant_name: str | None = None,
 ) -> Payment:
     """
-    Create a new payment.
-
-    Idempotent: if a payment with the same (api_key_id, external_ref)
-    already exists, it is returned as-is instead of creating a duplicate.
-    This protects against client retries caused by network timeouts.
-
-    Steps:
-      1. Idempotency check.
-      2. Validate token and chain.
-      3. Ensure a USD rate exists (fetch on demand if needed).
-      4. Generate unique order_id and salt.
-      5. Compute the proxy address pointing to wallet_address.
-      6. Compute amount_token_suggested.
-      7. Store the Payment with status=pending and expires_at.
-
-    Args:
-        session: SQLAlchemy session.
-        external_ref: merchant-side identifier for this payment.
-        amount_usd_cents: expected amount in USD cents.
-        token_id: chosen token.
-        wallet_address: destination address (the proxy's processor).
-        webhook_url: URL to notify once the payment is confirmed.
-        webhook_secret: secret used to sign the webhook (HMAC).
-        api_key_id: id of the ApiKey used, for auditing (optional).
-        merchant_name: human-readable merchant name, for the UI (optional).
-
-    Returns:
-        The newly created (or existing) Payment.
-
-    Raises:
-        PaymentError if anything is wrong.
+    Create a new payment. Idempotent per (api_key_id, external_ref).
     """
-    # --- Idempotency: return existing payment if one exists ---
+    # Idempotency
     if api_key_id is not None and external_ref:
         existing = (
             session.query(Payment)
@@ -162,7 +132,7 @@ def create_payment(
             )
             return existing
 
-    # --- Basic validation ---
+    # Validation
     if amount_usd_cents <= 0:
         raise PaymentError("amount_usd_cents must be greater than 0")
     if not external_ref:
@@ -174,7 +144,6 @@ def create_payment(
     if not webhook_secret:
         raise PaymentError("webhook_secret is empty")
 
-    # --- Validate token and chain ---
     token = session.get(Token, token_id)
     if not token or not token.active:
         raise PaymentError(f"token {token_id} does not exist or is inactive")
@@ -183,14 +152,12 @@ def create_payment(
     if not chain or not chain.active:
         raise PaymentError(f"chain {token.chain_id} does not exist or is inactive")
 
-    # --- Ensure a rate exists (fetch on demand if needed) ---
     rate = _ensure_rate(session, token)
 
-    # --- Generate unique contract identifiers ---
     order_id = _generate_order_id()
     salt = _generate_salt()
+    public_token = _generate_public_token()
 
-    # --- Compute the proxy address ---
     w3 = get_web3(chain.rpc_url)
     factory = get_factory_contract(w3, chain.factory_address)
     try:
@@ -200,14 +167,13 @@ def create_payment(
     except Exception as e:
         raise PaymentError(f"could not compute proxy: {e}") from e
 
-    # --- Suggested amount in token (stored as string to avoid overflow) ---
     amount_token_suggested = _calculate_amount_token(
         amount_usd_cents, rate.usd_rate, token.decimals,
     )
 
-    # --- Persist ---
     now = _utcnow()
     payment = Payment(
+        public_token=public_token,
         api_key_id=api_key_id,
         external_ref=external_ref,
         merchant_name=merchant_name,
@@ -230,7 +196,8 @@ def create_payment(
     session.flush()
 
     log.info(
-        f"Payment created id={payment.id} external_ref={external_ref} "
+        f"Payment created id={payment.id} public_token={public_token[:8]}... "
+        f"external_ref={external_ref} "
         f"merchant={merchant_name or '(unnamed)'} token={token.symbol} "
         f"usd_cents={amount_usd_cents} proxy={proxy_address}"
     )
@@ -242,7 +209,6 @@ def create_payment(
 # ---------------------------------------------------------------------------
 
 def mark_user_claimed(session: Session, payment: Payment) -> None:
-    """The user pressed 'I paid'. Does not change the flow, only priority."""
     if payment.status not in (PaymentStatus.PENDING, PaymentStatus.USER_CLAIMED):
         return
     payment.status = PaymentStatus.USER_CLAIMED
@@ -250,10 +216,6 @@ def mark_user_claimed(session: Session, payment: Payment) -> None:
 
 
 def mark_detected(session: Session, payment: Payment) -> None:
-    """
-    Funds are present in the proxy. Fix the rate, compute the USD amount,
-    and update the status to detected (or late_detected if expired).
-    """
     if payment.status not in (
         PaymentStatus.PENDING,
         PaymentStatus.USER_CLAIMED,
@@ -285,7 +247,6 @@ def mark_detected(session: Session, payment: Payment) -> None:
     amount_usd = amount_token_dec * rate.usd_rate
     amount_usd_cents = int(amount_usd * 100)
 
-    # Stored as string to avoid SQLite overflow on cheap tokens
     payment.amount_token_received = str(balance)
     payment.amount_usd_cents_received = amount_usd_cents
     payment.rate_used = rate.usd_rate
@@ -306,14 +267,12 @@ def mark_detected(session: Session, payment: Payment) -> None:
 
 def mark_deploying(session: Session, payment: Payment,
                    deploy_tx_hash: str) -> None:
-    """The gateway has sent the proxy deployment transaction."""
     payment.status = PaymentStatus.DEPLOYING
     payment.deploy_tx_hash = deploy_tx_hash
 
 
 def mark_confirmed(session: Session, payment: Payment,
                    tx_hash: str, block_number: int) -> None:
-    """The proxy was deployed and the Paid event was emitted."""
     payment.status = PaymentStatus.CONFIRMED
     payment.tx_hash = tx_hash
     payment.block_number = block_number
@@ -321,17 +280,11 @@ def mark_confirmed(session: Session, payment: Payment,
 
 
 def mark_failed(session: Session, payment: Payment, reason: str) -> None:
-    """Irrecoverable failure."""
     payment.status = PaymentStatus.FAILED
     log.error(f"payment {payment.id} failed: {reason}")
 
 
 def expire_overdue_payments(session: Session) -> int:
-    """
-    Mark as 'expired' those pending/user_claimed payments whose expires_at
-    has already passed. The worker keeps watching them for 24h more in
-    case the funds arrive late.
-    """
     now = _utcnow()
     payments = (
         session.query(Payment)
@@ -350,10 +303,6 @@ def expire_overdue_payments(session: Session) -> int:
 
 
 def count_confirmed_today(session: Session, api_key_id: int) -> int:
-    """
-    Count how many payments for this API key were confirmed today (UTC).
-    Used for the daily deploy quota.
-    """
     from sqlalchemy import func
     today_start = datetime.now(timezone.utc).replace(
         hour=0, minute=0, second=0, microsecond=0
@@ -371,7 +320,7 @@ def count_confirmed_today(session: Session, api_key_id: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Queries (used by the API and the worker)
+# Queries
 # ---------------------------------------------------------------------------
 
 def get_payment(session: Session, payment_id: int) -> Payment | None:
@@ -380,12 +329,6 @@ def get_payment(session: Session, payment_id: int) -> Payment | None:
 
 def get_payment_by_external_ref(session: Session, external_ref: str,
                                 api_key_id: int | None = None) -> Payment | None:
-    """
-    Find a payment by external_ref.
-
-    If api_key_id is provided, filter by that key too, so a merchant
-    cannot query another merchant's payments.
-    """
     q = session.query(Payment).filter_by(external_ref=external_ref)
     if api_key_id is not None:
         q = q.filter_by(api_key_id=api_key_id)
@@ -393,11 +336,6 @@ def get_payment_by_external_ref(session: Session, external_ref: str,
 
 
 def get_payments_to_poll(session: Session, chain_id: int) -> list[Payment]:
-    """
-    Payments the worker should check with get_balance:
-    - pending, user_claimed: still within TTL.
-    - expired, late_detected: past TTL but within 24h.
-    """
     limit = _utcnow() - timedelta(hours=PAYMENT_MONITOR_HOURS)
     return (
         session.query(Payment)
@@ -415,7 +353,6 @@ def get_payments_to_poll(session: Session, chain_id: int) -> list[Payment]:
 
 
 def get_payments_to_deploy(session: Session) -> list[Payment]:
-    """Payments detected but not yet deployed."""
     return (
         session.query(Payment)
         .filter(Payment.status == PaymentStatus.DETECTED)
@@ -424,7 +361,6 @@ def get_payments_to_deploy(session: Session) -> list[Payment]:
 
 
 def get_payments_to_webhook(session: Session) -> list[Payment]:
-    """Confirmed payments whose webhook has not been sent yet."""
     return (
         session.query(Payment)
         .filter(Payment.status == PaymentStatus.CONFIRMED)
