@@ -169,17 +169,22 @@ def create_payment(
     salt = _generate_salt()
     public_token = _generate_public_token()
 
-    w3 = get_web3(chain.rpc_url)
+        w3 = get_web3(chain.rpc_url)
     factory = get_factory_contract(w3, chain.factory_address)
+
+    # The factory computes actual_salt = keccak256(abi_encode(msg.sender, salt)),
+    # so the address depends on who sends the tx. Use the gateway wallet,
+    # which is the one that will actually call factory.create() later.
+    from app.config import PRIVATE_KEY
+    gateway_account = w3.eth.account.from_key(PRIVATE_KEY)
+
     try:
         proxy_address = blockchain.calculate_proxy(
             w3, factory, order_id, wallet_address, salt,
+            sender_address=gateway_account.address,
         )
     except Exception as e:
         raise PaymentError(f"could not compute proxy: {e}") from e
-
-    amount_token_suggested = _calculate_amount_token(
-        amount_usd_cents, rate.usd_rate, token.decimals,
     )
 
     now = _utcnow()
@@ -256,9 +261,14 @@ def mark_detected(session: Session, payment: Payment) -> None:
 
     amount_token_dec = Decimal(balance) / Decimal(10 ** token.decimals)
     amount_usd = amount_token_dec * rate.usd_rate
-    amount_usd_cents = int(amount_usd * 100)
+
+    # Micro-USD (10^-6 USD): preserves precision for small payments.
+    amount_usd_micros = int(round(amount_usd * 1_000_000))
+    # Cents: derived from micros (truncated). Kept for backwards compat.
+    amount_usd_cents = amount_usd_micros // 10_000
 
     payment.amount_token_received = str(balance)
+    payment.amount_usd_micros_received = amount_usd_micros
     payment.amount_usd_cents_received = amount_usd_cents
     payment.rate_used = rate.usd_rate
     payment.rate_source = rate.source
@@ -272,7 +282,7 @@ def mark_detected(session: Session, payment: Payment) -> None:
 
     log.info(
         f"payment {payment.id} detected: {balance} (base units), "
-        f"${amount_usd_cents / 100:.2f} at rate {rate.usd_rate}"
+        f"${amount_usd_micros / 1_000_000:.6f} at rate {rate.usd_rate}"
     )
 
 
@@ -372,6 +382,13 @@ def get_payments_to_deploy(session: Session) -> list[Payment]:
 
 
 def get_payments_to_webhook(session: Session) -> list[Payment]:
+    """
+    Payments pending webhook delivery.
+
+    Excludes payments whose retries are already exhausted (nº de intentos
+    fallidos >= MAX_ATTEMPTS). Those are considered terminally dead and
+    must not be re-processed every cycle.
+    """
     from sqlalchemy import func
     from app.core.models import WebhookAttempt
     from app.core.webhooks import MAX_ATTEMPTS
