@@ -9,6 +9,10 @@ merchant table.
 
 Before sending, it checks that the destination URL is not blocked
 due to too many recent failed attempts.
+
+Payments whose retries are already exhausted are filtered out at the
+query level (see payments.get_payments_to_webhook), so they never
+reach this loop and never spam the log.
 """
 
 from datetime import datetime, timezone
@@ -54,7 +58,9 @@ def run_once() -> int:
             # Should we retry now?
             next_wait = webhooks.next_attempt_seconds(p.id, s)
             if next_wait is None:
-                log.error(f"payment {p.id}: webhook retries exhausted")
+                # Retries exhausted. Silent: the query already filters
+                # these out, so we only reach here if something changed
+                # mid-cycle.
                 continue
 
             last = webhooks.last_attempt(s, p.id)
@@ -71,4 +77,3 @@ def run_once() -> int:
                 sent += 1
 
     return sent
-
