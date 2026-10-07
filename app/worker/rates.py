@@ -20,4 +20,3 @@ def run_once() -> int:
     if n:
         log.info(f"rates updated: {n}")
     return n
-
