@@ -13,6 +13,7 @@ from web3 import Web3
 
 from app.config import setup_logging
 from app.core import payments
+from app.core import rates as rates_module
 from app.core.auth import (
     authenticate_api_key,
     get_current_merchant,
@@ -42,8 +43,12 @@ log = setup_logging("gateway_app")
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _payment_to_dict(p: Payment) -> dict:
-    return {
+def _payment_to_dict(p: Payment, session=None) -> dict:
+    """
+    Serialize a payment. If `session` is provided, also include the current
+    token price (latest stored rate) so API clients can show it.
+    """
+    d = {
         "payment_id": p.id,
         "public_token": p.public_token,
         "external_ref": p.external_ref,
@@ -58,12 +63,32 @@ def _payment_to_dict(p: Payment) -> dict:
         "amount_token_received": p.amount_token_received,
         "amount_usd_cents_received": p.amount_usd_cents_received,
         "rate_used": str(p.rate_used) if p.rate_used else None,
+        "rate_source": p.rate_source,
+        "rate_fetched_at": (
+            p.rate_fetched_at.isoformat() if p.rate_fetched_at else None
+        ),
         "tx_hash": p.tx_hash,
         "block_number": p.block_number,
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "expires_at": p.expires_at.isoformat() if p.expires_at else None,
         "confirmed_at": p.confirmed_at.isoformat() if p.confirmed_at else None,
     }
+
+    # Current token price (latest stored rate)
+    if session is not None and p.token_id:
+        latest = rates_module.get_latest_rate(session, p.token_id)
+        if latest is not None:
+            d["token_price_usd"] = str(latest.usd_rate)
+            d["token_price_source"] = latest.source
+            d["token_price_fetched_at"] = (
+                latest.fetched_at.isoformat() if latest.fetched_at else None
+            )
+        else:
+            d["token_price_usd"] = None
+            d["token_price_source"] = None
+            d["token_price_fetched_at"] = None
+
+    return d
 
 
 def _get_payment_by_ref(s, payment_ref: str):
@@ -323,7 +348,7 @@ def register(app, rt) -> None:
                     merchant_name=merchant_name,
                 )
                 payments.ensure_public_token(s, p)
-                result = _payment_to_dict(p)
+                result = _payment_to_dict(p, s)
                 base_url = str(request.base_url).rstrip("/")
                 result["pay_url"] = f"{base_url}/pay/{p.public_token}"
         except payments.PaymentError as e:
@@ -344,7 +369,7 @@ def register(app, rt) -> None:
             p = payments.get_payment(s, payment_id)
             if not p or p.api_key_id != merchant["id"]:
                 return JSONResponse({"error": "not found"}, status_code=404)
-            return JSONResponse(_payment_to_dict(p))
+            return JSONResponse(_payment_to_dict(p, s))
 
     # Public payment UI (uses public_token or numeric id)
     @rt("/pay/{payment_ref}", methods=["GET"])
