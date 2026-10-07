@@ -263,7 +263,7 @@ def register(app, rt) -> None:
         except Exception:
             return JSONResponse({"error": "invalid json"}, status_code=400)
 
-        external_ref = body.get("external_ref")
+        external_ref = body.get("external_ref")   # now optional
         amount_usd_cents = body.get("amount_usd_cents")
         token_id = body.get("token_id")
         wallet_raw = body.get("wallet_address")
@@ -272,8 +272,6 @@ def register(app, rt) -> None:
         merchant_name = body.get("merchant_name")
 
         missing = []
-        if not external_ref:
-            missing.append("external_ref")
         if not amount_usd_cents:
             missing.append("amount_usd_cents")
         if not token_id:
