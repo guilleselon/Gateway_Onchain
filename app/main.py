@@ -363,6 +363,18 @@ _JS = """
 app, rt = fast_app(
     pico=False,
     hdrs=(
+        Title("Onchain Gateway"),
+        Link(
+            rel="icon",
+            href=(
+                "data:image/svg+xml,"
+                "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
+                "<circle cx='50' cy='50' r='50' fill='%236d28d9'/>"
+                "<path d='M55 20 L35 55 L48 55 L45 80 L65 45 L52 45 Z' fill='white'/>"
+                "</svg>"
+            ),
+        ),
+
         Style(_CSS),
         Script(f"window.__GATEWAY_RPC = {_rpc_for_js!r};"),
         Script(_JS),
