@@ -149,6 +149,23 @@ def apply_schema_migrations() -> None:
             ))
         log.info("Migration complete: public_token added.")
 
+    if "amount_usd_micros_received" not in columns:
+        log.info(
+            "Migration: adding 'amount_usd_micros_received' column to payments..."
+        )
+        with engine.begin() as conn:
+            if IS_SQLITE:
+                conn.execute(text(
+                    "ALTER TABLE payments "
+                    "ADD COLUMN amount_usd_micros_received BIGINT"
+                ))
+            else:
+                conn.execute(text(
+                    "ALTER TABLE payments "
+                    "ADD COLUMN IF NOT EXISTS amount_usd_micros_received BIGINT"
+                ))
+        log.info("Migration complete: amount_usd_micros_received added.")
+
 
 # ---------------------------------------------------------------------------
 # Auto-initialization
