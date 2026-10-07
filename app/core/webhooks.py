@@ -66,14 +66,17 @@ def build_payload(payment: Payment, token: Token,
     """
     JSON payload sent to the merchant.
 
-    `amount_token_received` is stored as a string in the DB, but the
-    payload exposes it as an int for JSON compatibility. If the value
-    exceeds 2^63, most JSON parsers handle it as a bignum, so there is
-    no loss of precision in the wire format.
+    The tx_hash is normalized to 0x-prefixed hex so the explorer URL works
+    on every block explorer.
     """
+    # Normalize tx_hash to 0x-prefixed
+    tx_hash = payment.tx_hash
+    if tx_hash and not tx_hash.startswith("0x"):
+        tx_hash = "0x" + tx_hash
+
     explorer_url = None
-    if chain and chain.explorer_url and payment.tx_hash:
-        explorer_url = f"{chain.explorer_url.rstrip('/')}/tx/{payment.tx_hash}"
+    if chain and chain.explorer_url and tx_hash:
+        explorer_url = f"{chain.explorer_url.rstrip('/')}/tx/{tx_hash}"
 
     return {
         "payment_id": payment.id,
@@ -90,7 +93,7 @@ def build_payload(payment: Payment, token: Token,
         "rate_source": payment.rate_source,
         "wallet_address": payment.wallet_address,
         "proxy_address": payment.proxy_address,
-        "tx_hash": payment.tx_hash,
+        "tx_hash": tx_hash,
         "block_number": payment.block_number,
         "explorer_url": explorer_url,
         "confirmed_at": (
