@@ -31,6 +31,7 @@ load_dotenv(BASE_DIR / ".env")
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'gateway.db'}")
 PRIVATE_KEY = os.getenv("PRIVATE_KEY")
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
+COINMARKETCAP_API_KEY = os.getenv("COINMARKETCAP_API_KEY", "")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # --- Dashboard sessions ---
