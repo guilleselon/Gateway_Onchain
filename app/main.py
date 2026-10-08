@@ -373,10 +373,10 @@ _JS = """
 """
 
 app, rt = fast_app(
+    title="Gateway Onchain",
     pico=False,
     default_hdrs=False,
     hdrs=(
-        Title("Gateway Onchain"),
         Link(
             rel="icon",
             href=(
