@@ -1,14 +1,5 @@
 """
 Gateway database models.
-
-Tables:
-- ApiKey: API keys issued to merchants.
-- Chain: supported networks.
-- Token: tokens accepted per network.
-- ExchangeRate: USD/token rate history.
-- Payment: individual payments.
-- PaymentEvent: idempotency for on-chain events.
-- WebhookAttempt: webhook delivery attempts.
 """
 
 from datetime import datetime, timezone
@@ -35,7 +26,6 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# --- Payment statuses ---
 class PaymentStatus:
     PENDING = "pending"
     USER_CLAIMED = "user_claimed"
@@ -48,13 +38,11 @@ class PaymentStatus:
 
     ALL = (PENDING, USER_CLAIMED, DETECTED, DEPLOYING, CONFIRMED,
            LATE_DETECTED, FAILED, EXPIRED)
-
     TERMINAL_OK = (CONFIRMED, LATE_DETECTED)
     TERMINAL_ERR = (FAILED, EXPIRED)
     TERMINAL = TERMINAL_OK + TERMINAL_ERR
 
 
-# --- ApiKey ---
 class ApiKey(Base):
     __tablename__ = "api_keys"
 
@@ -72,7 +60,6 @@ class ApiKey(Base):
     )
 
 
-# --- Chain ---
 class Chain(Base):
     __tablename__ = "chains"
 
@@ -89,7 +76,6 @@ class Chain(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
-# --- Token ---
 class Token(Base):
     __tablename__ = "tokens"
     __table_args__ = (
@@ -105,7 +91,6 @@ class Token(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
-# --- ExchangeRate ---
 class ExchangeRate(Base):
     __tablename__ = "exchange_rates"
 
@@ -118,7 +103,6 @@ class ExchangeRate(Base):
     )
 
 
-# --- Payment ---
 class Payment(Base):
     __tablename__ = "payments"
     __table_args__ = (
@@ -131,9 +115,6 @@ class Payment(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-    # Public, non-guessable token used in the customer-facing URL.
-    # Nullable for backwards compatibility with rows created before
-    # this column existed; new payments always get one.
     public_token: Mapped[str | None] = mapped_column(
         String(40), nullable=True
     )
@@ -160,11 +141,9 @@ class Payment(Base):
     amount_token_received: Mapped[str | None] = mapped_column(
         String(80), nullable=True
     )
-    # Cents (integer, 2 decimals). Kept for backwards compatibility.
     amount_usd_cents_received: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
     )
-    # Micro-USD (integer, 6 decimals). Preserves precision for small payments.
     amount_usd_micros_received: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
     )
@@ -219,7 +198,6 @@ class Payment(Base):
     )
 
 
-# --- PaymentEvent ---
 class PaymentEvent(Base):
     __tablename__ = "payment_events"
     __table_args__ = (
@@ -240,7 +218,6 @@ class PaymentEvent(Base):
     )
 
 
-# --- WebhookAttempt ---
 class WebhookAttempt(Base):
     __tablename__ = "webhook_attempts"
 
