@@ -86,11 +86,15 @@ def _fmt_rate(rate, source, fetched_at) -> str:
     return base
 
 
+# ===========================================================================
+# LANDING
+# ===========================================================================
+
 def landing_page() -> Main:
     return Main(
         Div(
             Div(
-                H1("Gateway"),
+                H1("Gateway Onchain"),
                 P("Crypto payments without friction."),
                 P("Funds go straight to your wallet. No custody, no accounts."),
                 A(
@@ -122,10 +126,14 @@ def landing_page() -> Main:
             ),
             cls="landing-features",
         ),
-        Div("© Gateway", cls="landing-footer"),
-        Title("Gateway · Crypto payments"),
+        Div("© Gateway Onchain", cls="landing-footer"),
+        Title("Gateway Onchain · Crypto payments"),
     )
 
+
+# ===========================================================================
+# PUBLIC PAYMENT UI
+# ===========================================================================
 
 def _badge(payment) -> Div:
     text, color = STATUS_LABELS.get(payment.status,
@@ -335,7 +343,7 @@ def payment_layout(payment, token, chain, merchant: dict) -> Main:
     return Main(
         Div(
             Div(
-                H1("Gateway"),
+                H1("Gateway Onchain"),
                 P("On-chain crypto payments"),
                 Div(
                     P("· No wallet connection needed"),
@@ -361,9 +369,13 @@ def error_layout(message: str) -> Main:
             ),
             cls="pay-panel",
         ),
-        Title("Payment not found"),
+        Title("Payment not found · Gateway Onchain"),
     )
 
+
+# ===========================================================================
+# LOGIN
+# ===========================================================================
 
 def login_page(error: str | None = None) -> Main:
     title = "Sign in to the dashboard"
@@ -397,10 +409,14 @@ def login_page(error: str | None = None) -> Main:
     )
     return Main(
         Div(*children, cls="login-card"),
-        Title(title if error else "Sign in · Gateway"),
+        Title("Sign in · Gateway Onchain"),
         cls="login-wrap",
     )
 
+
+# ===========================================================================
+# DASHBOARD
+# ===========================================================================
 
 def _dash_layout(merchant: dict, content, active: str = "home") -> Main:
     def _nav(label: str, href: str, key: str):
@@ -408,7 +424,7 @@ def _dash_layout(merchant: dict, content, active: str = "home") -> Main:
         return A(label, href=href, cls=cls)
 
     sidebar = Div(
-        P("Gateway", cls="logo"),
+        P("Gateway Onchain", cls="logo"),
         _nav("Home", "/dashboard", "home"),
         _nav("Payments", "/dashboard/payments", "payments"),
         _nav("Settings", "/dashboard/settings", "settings"),
@@ -423,7 +439,7 @@ def _dash_layout(merchant: dict, content, active: str = "home") -> Main:
     return Main(
         sidebar,
         Div(content, cls="main"),
-        Title("Dashboard · Gateway"),
+        Title("Dashboard · Gateway Onchain"),
         cls="dash",
     )
 
@@ -439,11 +455,10 @@ def _curl_example() -> Div:
         '  -H "X-API-Key: sk_live_..." \\\n'
         '  -H "Content-Type: application/json" \\\n'
         '  -d \'{\n'
-        '    "external_ref": "order-123",\n'
         '    "amount_usd_cents": 1000,\n'
         '    "token_id": 1,\n'
         '    "wallet_address": "0xYourWallet...",\n'
-        '    "webhook_url": "https://your-site.com/webhook"\n'
+        '    "webhook_url": "https://webhook.site/your-unique-id"\n'
         '  }\''
     )
     return Div(example, cls="code-block")
