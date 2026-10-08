@@ -39,8 +39,9 @@ atexit.register(engine.dispose)
 log = setup_logging("gateway_app")
 
 # Auto-initialize the database on first boot.
-# Idempotent: creates tables, seeds chain/tokens, and prints a demo API key
-# if there is none. Safe to run every time the app starts.
+# Idempotent: creates tables, seeds chain/tokens, applies migrations,
+# backfills micros for old payments, and prints a demo API key if there is
+# none. Safe to run every time the app starts.
 try:
     ensure_db_initialized()
 except Exception as e:
@@ -230,6 +231,34 @@ code, .mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-si
 .mt-1 { margin-top: 0.5rem; }
 .mt-2 { margin-top: 1rem; }
 .mt-3 { margin-top: 1.5rem; }
+
+/* --- Success screen --- */
+.success-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--ok-bg);
+  color: var(--ok);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+  font-weight: 800;
+  margin: 0 auto 0.5rem;
+}
+.success-icon::before { content: "✓"; }
+.success-icon i { display: none; }
+
+.tx-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  margin-top: 1rem;
+}
 
 /* --- Login --- */
 .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 2rem; }
