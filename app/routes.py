@@ -39,15 +39,7 @@ from app.templates import (
 log = setup_logging("gateway_app")
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _payment_to_dict(p: Payment, session=None) -> dict:
-    """
-    Serialize a payment. If `session` is provided, also include the current
-    token price (latest stored rate) so API clients can show it.
-    """
     d = {
         "payment_id": p.id,
         "public_token": p.public_token,
@@ -127,18 +119,12 @@ def _derive_webhook_secret(api_key: str) -> str:
     ).hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# Route registration
-# ---------------------------------------------------------------------------
-
 def register(app, rt) -> None:
 
-    # Landing
     @rt("/", methods=["GET"])
     def home(request: Request):
         return landing_page()
 
-    # Health
     @rt("/health", methods=["GET"])
     def health():
         from sqlalchemy import text
@@ -157,7 +143,6 @@ def register(app, rt) -> None:
         }
         return JSONResponse(payload, status_code=200 if db_ok else 503)
 
-    # Login / logout
     @rt("/login", methods=["GET"])
     def login_get(request: Request):
         if get_current_merchant(request):
@@ -196,7 +181,6 @@ def register(app, rt) -> None:
         logout_session(request)
         return RedirectResponse("/login", status_code=302)
 
-    # Dashboard
     @rt("/dashboard", methods=["GET"])
     def dashboard(request: Request):
         merchant = get_current_merchant(request)
@@ -217,15 +201,25 @@ def register(app, rt) -> None:
                                           PaymentStatus.USER_CLAIMED,
                                           PaymentStatus.DETECTED,
                                           PaymentStatus.DEPLOYING))
-            usd_received = sum(
-                (p.amount_usd_cents_received or 0) for p in payments_list
-                if p.status in PaymentStatus.TERMINAL_OK
-            ) / 100
+
+            usd_received_micros = 0
+            for p in payments_list:
+                if p.status not in PaymentStatus.TERMINAL_OK:
+                    continue
+                micros = getattr(p, "amount_usd_micros_received", None)
+                if micros is not None:
+                    usd_received_micros += micros
+                else:
+                    usd_received_micros += (
+                        (p.amount_usd_cents_received or 0) * 10_000
+                    )
+
         stats = {
             "total": total,
             "confirmed": confirmed,
             "pending": pending,
-            "usd_received": usd_received,
+            "usd_received_micros": usd_received_micros,
+            "usd_received": usd_received_micros / 1_000_000,
         }
         return dashboard_home(merchant, stats)
 
@@ -264,7 +258,6 @@ def register(app, rt) -> None:
             return RedirectResponse("/login", status_code=302)
         return dashboard_settings(merchant)
 
-    # API
     @rt("/api/payments", methods=["POST"])
     async def api_create_payment(request: Request):
         api_key = request.headers.get("x-api-key")
@@ -367,7 +360,6 @@ def register(app, rt) -> None:
                 return JSONResponse({"error": "not found"}, status_code=404)
             return JSONResponse(_payment_to_dict(p, s))
 
-    # Public payment UI (uses public_token or numeric id)
     @rt("/pay/{payment_ref}", methods=["GET"])
     def pay_page(request: Request, payment_ref: str):
         with get_session() as s:
