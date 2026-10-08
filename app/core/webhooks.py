@@ -1,22 +1,5 @@
 """
-Webhook signing and delivery to the merchant.
-
-Responsibilities:
-- Sign payloads with HMAC-SHA256.
-- POST to the payment's webhook_url.
-- Record each attempt in webhook_attempts.
-- Compute the next retry with exponential backoff.
-
-Signature format:
-    signature = HMAC-SHA256(webhook_secret, timestamp + "." + raw_body)
-    Sent in headers:
-        X-Webhook-Signature: <hex>
-        X-Webhook-Timestamp: <unix_ts>
-        X-Webhook-Payment-Id: <id>
-
-The URL and the secret are read from the Payment itself, not from a
-merchant table. Note: signature verification does NOT live here. The
-gateway only signs; the receiver (the merchant) verifies.
+Webhook signing and delivery.
 """
 
 import hashlib
@@ -33,43 +16,20 @@ from app.core.models import Chain, Payment, Token, WebhookAttempt
 
 log = setup_logging("gateway_webhooks")
 
-# Backoff in seconds. Index 0 = first attempt (immediate).
 BACKOFF_SECONDS = [0, 30, 60, 300, 900, 3600, 21600]
 MAX_ATTEMPTS = len(BACKOFF_SECONDS)
 
-# Webhook rate limiting per destination URL
 WEBHOOK_MAX_FAILURES = 10
 WEBHOOK_WINDOW_SECONDS = 300
 
 
-# ---------------------------------------------------------------------------
-# Signing
-# ---------------------------------------------------------------------------
-
 def sign_payload(secret: str, timestamp: int, body: bytes) -> str:
-    """
-    Compute HMAC-SHA256 over 'timestamp.body'.
-
-    Same convention used by Stripe, GitHub and Shopify. The receiver
-    recomputes the signature and compares in constant time.
-    """
     message = f"{timestamp}.".encode() + body
     return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# Payload
-# ---------------------------------------------------------------------------
-
 def build_payload(payment: Payment, token: Token,
                   chain: Chain | None = None) -> dict:
-    """
-    JSON payload sent to the merchant.
-
-    The tx_hash is normalized to 0x-prefixed hex so the explorer URL works
-    on every block explorer.
-    """
-    # Normalize tx_hash to 0x-prefixed
     tx_hash = payment.tx_hash
     if tx_hash and not tx_hash.startswith("0x"):
         tx_hash = "0x" + tx_hash
@@ -108,17 +68,7 @@ def build_payload(payment: Payment, token: Token,
     }
 
 
-# ---------------------------------------------------------------------------
-# Delivery
-# ---------------------------------------------------------------------------
-
 def send_webhook(session: Session, payment: Payment, token: Token) -> bool:
-    """
-    POST to the payment's webhook_url. Records the attempt.
-
-    Returns:
-        True on 2xx response, False otherwise.
-    """
     chain = session.get(Chain, token.chain_id) if token else None
 
     body_dict = build_payload(payment, token, chain)
@@ -176,12 +126,6 @@ def send_webhook(session: Session, payment: Payment, token: Token) -> bool:
 
 
 def next_attempt_seconds(payment_id: int, session: Session) -> int | None:
-    """
-    Seconds until the next retry, according to the backoff list.
-
-    Returns:
-        Seconds, or None if retries are exhausted.
-    """
     n = (
         session.query(WebhookAttempt)
         .filter_by(payment_id=payment_id)
@@ -203,10 +147,6 @@ def last_attempt(session: Session, payment_id: int) -> WebhookAttempt | None:
 
 
 def is_url_blocked(session: Session, webhook_url: str) -> bool:
-    """
-    Return True if the URL has received too many recent failed attempts.
-    Used to temporarily block abusive destination URLs.
-    """
     from datetime import timedelta
     limit = datetime.now(timezone.utc) - timedelta(
         seconds=WEBHOOK_WINDOW_SECONDS
