@@ -1,13 +1,5 @@
 """
 Gateway FastHTML app.
-
-Serves:
-- Public landing page.
-- Public payment UI.
-- Merchant login and dashboard.
-- Internal API for merchants (X-API-Key).
-
-No CDN. Minimal inline CSS.
 """
 
 import atexit
@@ -23,25 +15,16 @@ from app.config import RPC_URL, SESSION_SECRET, setup_logging
 from app.core.db import engine, ensure_db_initialized
 from app.routes import register
 
-# The web service requires SESSION_SECRET to sign session cookies.
-# The worker does not import this module, so it does not need it.
 if not SESSION_SECRET:
     raise RuntimeError(
         "SESSION_SECRET is not set. "
         "The web service requires it to sign session cookies."
     )
 
-# Ensure the DB connection pool is closed cleanly on shutdown (SIGTERM/SIGINT).
-# Important on platforms that restart services frequently (Render, Railway)
-# to avoid leaving orphan connections in PostgreSQL.
 atexit.register(engine.dispose)
 
 log = setup_logging("gateway_app")
 
-# Auto-initialize the database on first boot.
-# Idempotent: creates tables, seeds chain/tokens, applies migrations,
-# backfills micros for old payments, and prints a demo API key if there is
-# none. Safe to run every time the app starts.
 try:
     ensure_db_initialized()
 except Exception as e:
@@ -391,8 +374,9 @@ _JS = """
 
 app, rt = fast_app(
     pico=False,
+    default_hdrs=False,
     hdrs=(
-        Title("Onchain Gateway"),
+        Title("Gateway Onchain"),
         Link(
             rel="icon",
             href=(
@@ -403,7 +387,6 @@ app, rt = fast_app(
                 "</svg>"
             ),
         ),
-
         Style(_CSS),
         Script(f"window.__GATEWAY_RPC = {_rpc_for_js!r};"),
         Script(_JS),
