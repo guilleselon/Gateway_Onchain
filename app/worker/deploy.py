@@ -1,17 +1,9 @@
 """
 Proxy deployment task for the gateway worker.
 
-Two phases per cycle:
-
-1. Send phase: for every detected payment, send the deploy transaction
-   and mark the payment as deploying. Does NOT wait for the receipt.
-   Uses a local nonce manager to avoid collisions when multiple txs
-   are sent in the same cycle.
-
-2. Confirm phase: for every deploying payment, check if its deploy tx
-   has been confirmed, verify the proxy was actually deployed at the
-   expected address, and that the balance was forwarded to the merchant.
-   Only then mark it as confirmed.
+Phase 1: send deploy txs for DETECTED payments.
+Phase 2: verify deploy receipts AND that the proxy actually deployed
+         at the expected address with a zero balance. Only then confirm.
 """
 
 from app.config import (
@@ -30,18 +22,12 @@ log = setup_logging("gateway_worker")
 
 
 def _gateway_balance_ok(w3) -> tuple[bool, int]:
-    """Check the gateway balance. Returns (ok, balance_wei)."""
     account = w3.eth.account.from_key(PRIVATE_KEY)
     balance = w3.eth.get_balance(account.address)
     return balance >= MIN_GATEWAY_BALANCE_WEI, balance
 
 
-# ---------------------------------------------------------------------------
-# Phase 1: send deploy transactions
-# ---------------------------------------------------------------------------
-
 def _send_phase(session) -> int:
-    """Send deploy txs for detected payments. Returns how many were sent."""
     pending = payments.get_payments_to_deploy(session)
     if not pending:
         return 0
@@ -97,20 +83,11 @@ def _send_phase(session) -> int:
     return sent
 
 
-# ---------------------------------------------------------------------------
-# Phase 2: check confirmations
-# ---------------------------------------------------------------------------
-
 def _confirm_phase(session) -> int:
     """
-    Check deploying payments for confirmations.
-
-    Beyond checking receipt.status == 1, verifies:
-      1. The proxy at payment.proxy_address actually has code.
-      2. The proxy's balance is 0 (funds were forwarded).
-
-    If either check fails, marks the payment as FAILED with a clear reason
-    instead of falsely reporting CONFIRMED.
+    Verify deploying payments. Beyond receipt.status == 1, verify:
+      1. The proxy at payment.proxy_address has code.
+      2. The proxy balance is 0 (funds were forwarded).
     """
     deploying = (
         session.query(Payment)
@@ -142,23 +119,17 @@ def _confirm_phase(session) -> int:
             payments.mark_failed(session, p, "deploy tx reverted")
             continue
 
-        # --- Post-deploy verification ---
-
-        # 1. Does the expected proxy address actually have code?
         try:
             proxy_has_code = blockchain.has_code(w3, p.proxy_address)
         except Exception as e:
-            log.warning(
-                f"payment {p.id}: could not check proxy code: {e}"
-            )
+            log.warning(f"payment {p.id}: could not check proxy code: {e}")
             continue
 
         if not proxy_has_code:
             payments.mark_failed(
                 session, p,
                 f"deploy tx succeeded but no code at expected proxy "
-                f"{p.proxy_address} (CREATE2 address mismatch — "
-                f"check that calculate_proxy uses the same msg.sender)"
+                f"{p.proxy_address} (CREATE2 address mismatch)"
             )
             log.error(
                 f"payment {p.id}: CREATE2 MISMATCH. Expected proxy at "
@@ -167,13 +138,10 @@ def _confirm_phase(session) -> int:
             )
             continue
 
-        # 2. Was the balance forwarded to the merchant?
         try:
             remaining = blockchain.get_balance(w3, p.proxy_address)
         except Exception as e:
-            log.warning(
-                f"payment {p.id}: could not read proxy balance: {e}"
-            )
+            log.warning(f"payment {p.id}: could not read proxy balance: {e}")
             continue
 
         if remaining > 0:
@@ -181,8 +149,6 @@ def _confirm_phase(session) -> int:
                 f"payment {p.id}: proxy {p.proxy_address} still holds "
                 f"{remaining} wei after initialize. Not marking as confirmed."
             )
-            # Leave it in DEPLOYING so it gets re-checked. If it stays
-            # stuck, an operator must intervene.
             continue
 
         payments.mark_confirmed(
@@ -197,12 +163,7 @@ def _confirm_phase(session) -> int:
     return confirmed
 
 
-# ---------------------------------------------------------------------------
-# Cycle entry
-# ---------------------------------------------------------------------------
-
 def run_once() -> int:
-    """Run one deploy cycle. Returns payments that moved forward."""
     with get_session() as s:
         sent = _send_phase(s)
         confirmed = _confirm_phase(s)
