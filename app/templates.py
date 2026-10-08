@@ -3,6 +3,7 @@ FastHTML components for the gateway.
 """
 
 import io
+from decimal import Decimal
 
 import qrcode
 import qrcode.image.svg
@@ -39,9 +40,51 @@ def generate_qr_svg(data: str, box_size: int = 10, border: int = 2) -> str:
     return buf.getvalue().decode("utf-8")
 
 
-# ===========================================================================
-# LANDING
-# ===========================================================================
+def _fmt_usd_micros(micros) -> str:
+    if micros is None or micros == 0:
+        return "$0.00"
+    m = int(micros)
+    if m < 10_000:
+        return f"${m / 1_000_000:.6f}"
+    if m < 1_000_000:
+        return f"${m / 1_000_000:.4f}"
+    return f"${m / 1_000_000:.2f}"
+
+
+def _fmt_usd_received(p) -> str:
+    micros = getattr(p, "amount_usd_micros_received", None)
+    if micros is None:
+        cents = p.amount_usd_cents_received or 0
+        return f"${cents / 100:.2f}"
+    return _fmt_usd_micros(micros)
+
+
+def _fmt_token_amount(raw_wei, decimals: int, symbol: str) -> str:
+    if not raw_wei:
+        return "—"
+    try:
+        value = Decimal(raw_wei) / Decimal(10 ** decimals)
+    except Exception:
+        return f"{raw_wei} (raw)"
+    s = f"{value:.8f}".rstrip("0").rstrip(".")
+    if not s:
+        s = "0"
+    return f"{s} {symbol}"
+
+
+def _fmt_rate(rate, source, fetched_at) -> str:
+    if rate is None:
+        return "—"
+    base = f"${rate}/token"
+    parts = []
+    if source:
+        parts.append(source)
+    if fetched_at:
+        parts.append(fetched_at.strftime("%Y-%m-%d %H:%M UTC"))
+    if parts:
+        base += f"  ({', '.join(parts)})"
+    return base
+
 
 def landing_page() -> Main:
     return Main(
@@ -84,10 +127,6 @@ def landing_page() -> Main:
     )
 
 
-# ===========================================================================
-# PUBLIC PAYMENT UI
-# ===========================================================================
-
 def _badge(payment) -> Div:
     text, color = STATUS_LABELS.get(payment.status,
                                     ("Waiting for your payment...", "amber"))
@@ -120,38 +159,73 @@ def _status_widget(payment) -> Div:
 
 def _SuccessStatus(payment, token, explorer_url: str | None) -> Div:
     tx = payment.tx_hash or ""
-    # Normalize to 0x-prefixed
     if tx and not tx.startswith("0x"):
         tx = "0x" + tx
     short_hash = (tx[:10] + "..." + tx[-8:]) if len(tx) > 20 else tx
+
     children = [
-        Div(
-            I(cls="fa-solid fa-check text-emerald-600 text-3xl"),
-            cls="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center mb-4 mx-auto",
-        ),
-        H3("Payment received!", cls="text-xl font-extrabold text-gray-900 text-center"),
-        P("Thank you for your payment",
-          cls="text-gray-500 text-sm mt-1 text-center"),
+        Div(I(cls="fa-solid fa-check"), cls="success-icon"),
+        H3("Payment received!", cls="center",
+           style="font-size:1.2rem;font-weight:800;margin-top:0.5rem;"),
+        P("Thank you for your payment", cls="center",
+          style="color:var(--muted);font-size:0.85rem;margin-top:0.25rem;"),
     ]
+
     if short_hash:
-        children.append(
-            Div(
-                Span("TX ", cls="text-gray-400 text-[10px]"),
-                Span(short_hash, cls="text-xs font-mono text-[#836EF9] font-semibold"),
-                cls="bg-gray-50 rounded-lg px-3 py-2 inline-block mt-4",
+        tx_children = [
+            Span("TX ", style="color:var(--muted);font-size:0.65rem;"),
+        ]
+        if explorer_url and tx:
+            tx_children.append(
+                A(
+                    short_hash,
+                    href=f"{explorer_url.rstrip('/')}/tx/{tx}",
+                    target="_blank",
+                    rel="noopener",
+                    style=(
+                        "color:var(--primary);font-family:ui-monospace,monospace;"
+                        "font-size:0.75rem;font-weight:600;text-decoration:none;"
+                    ),
+                    title="Open in block explorer",
+                )
+            )
+        else:
+            tx_children.append(
+                Span(
+                    short_hash,
+                    style=(
+                        "font-family:ui-monospace,monospace;"
+                        "font-size:0.75rem;font-weight:600;"
+                    ),
+                )
+            )
+        tx_children.append(
+            Button(
+                "⧉",
+                cls="btn-copy mono",
+                **{"data-copy": tx},
+                style="margin-left:0.4rem;padding:0.15rem 0.4rem;",
+                title="Copy tx hash",
             )
         )
+        children.append(Div(*tx_children, cls="tx-pill"))
+
     if explorer_url and tx:
         children.append(
             A(
-                I(cls="fa-solid fa-arrow-up-right-from-square mr-1 text-xs"),
-                "View on explorer",
+                "View on explorer →",
                 href=f"{explorer_url.rstrip('/')}/tx/{tx}",
                 target="_blank",
-                cls="block mt-4 text-[#836EF9] text-xs font-semibold hover:underline text-center",
+                rel="noopener",
+                style=(
+                    "display:block;margin-top:1rem;color:var(--primary);"
+                    "font-size:0.85rem;font-weight:600;text-decoration:none;"
+                    "text-align:center;"
+                ),
             )
         )
-    return Div(*children, id="payment-status", cls="text-center animate-in")
+
+    return Div(*children, id="payment-status", cls="text-center")
 
 
 def _ErrorStatus(payment) -> Div:
@@ -237,10 +311,12 @@ def _QRContent(payment, token, chain_name: str, chain_id: int,
 def status_fragment(payment) -> Div:
     if payment.status in PaymentStatus.TERMINAL_OK:
         from app.core.db import get_session
-        from app.core.models import Token
+        from app.core.models import Chain, Token
         with get_session() as s:
             token = s.get(Token, payment.token_id)
-            return _SuccessStatus(payment, token, None)
+            chain = s.get(Chain, token.chain_id) if token else None
+            explorer_url = getattr(chain, "explorer_url", None) if chain else None
+        return _SuccessStatus(payment, token, explorer_url)
     if payment.status in PaymentStatus.TERMINAL_ERR:
         return _ErrorStatus(payment)
     return _status_widget(payment)
@@ -289,10 +365,6 @@ def error_layout(message: str) -> Main:
     )
 
 
-# ===========================================================================
-# LOGIN
-# ===========================================================================
-
 def login_page(error: str | None = None) -> Main:
     title = "Sign in to the dashboard"
     error_block = None
@@ -329,10 +401,6 @@ def login_page(error: str | None = None) -> Main:
         cls="login-wrap",
     )
 
-
-# ===========================================================================
-# DASHBOARD
-# ===========================================================================
 
 def _dash_layout(merchant: dict, content, active: str = "home") -> Main:
     def _nav(label: str, href: str, key: str):
@@ -382,6 +450,12 @@ def _curl_example() -> Div:
 
 
 def dashboard_home(merchant: dict, stats: dict) -> Main:
+    micros = stats.get("usd_received_micros")
+    if micros is None:
+        usd_display = f"${stats.get('usd_received', 0):.2f}"
+    else:
+        usd_display = _fmt_usd_micros(int(micros))
+
     content = Div(
         H1(f"Hello, {merchant['name']}"),
         P("Overview of your payments", cls="sub"),
@@ -389,7 +463,7 @@ def dashboard_home(merchant: dict, stats: dict) -> Main:
             _stat_card("Total payments", stats["total"]),
             _stat_card("Confirmed", stats["confirmed"], "ok"),
             _stat_card("Pending", stats["pending"], "warn"),
-            _stat_card("USD received", f"${stats['usd_received']:.2f}", "primary"),
+            _stat_card("USD received", usd_display, "primary"),
             cls="stats",
         ),
         Div(
@@ -430,7 +504,7 @@ def dashboard_payments(merchant: dict, payments: list) -> Main:
                     ),
                     Div(_badge_row(p.status)),
                     Div(
-                        Div(f"${(p.amount_usd_cents_received or 0) / 100:.2f}",
+                        Div(_fmt_usd_received(p),
                             style="font-weight:700;text-align:right;"),
                         Div(f"id {p.id}",
                             style="color:var(--muted);font-size:0.75rem;text-align:right;"),
@@ -457,16 +531,10 @@ def dashboard_payment_detail(merchant: dict, payment, token, chain) -> Main:
                    cls="row-between")
 
     def _tx_row(label: str, tx_hash: str | None):
-        """
-        Row for a transaction hash: clickable link to the explorer (if
-        available) + copy button. Falls back to plain text if no explorer.
-        """
         if not tx_hash:
             return row(label, "—")
-
         tx = tx_hash if tx_hash.startswith("0x") else "0x" + tx_hash
         explorer = getattr(chain, "explorer_url", None) if chain else None
-
         if explorer:
             tx_el = A(
                 tx,
@@ -481,7 +549,6 @@ def dashboard_payment_detail(merchant: dict, payment, token, chain) -> Main:
             )
         else:
             tx_el = Span(tx, cls="mono", style="word-break:break-all;")
-
         return Div(
             Span(label, cls="key"),
             Div(
@@ -500,12 +567,40 @@ def dashboard_payment_detail(merchant: dict, payment, token, chain) -> Main:
             cls="row-between",
         )
 
+    expected_micros = (payment.amount_usd_cents_expected or 0) * 10_000
+    received_micros = payment.amount_usd_micros_received or 0
+    ratio_note = None
+    if expected_micros > 0:
+        ratio = received_micros / expected_micros
+        if ratio < 0.99:
+            ratio_note = f"{ratio * 100:.2f}% of expected"
+        elif ratio > 1.01:
+            ratio_note = f"{ratio * 100:.2f}% of expected (overpaid)"
+
+    token_symbol = token.symbol if token else "?"
+    token_decimals = token.decimals if token else 18
     ref = payment.public_token or str(payment.id)
+
     content = Div(
         A("← Back to payments", href="/dashboard/payments",
           style="font-size:0.85rem;font-weight:600;"),
         H1(payment.external_ref, style="margin-top:1rem;"),
         Div(_badge_row(payment.status), cls="mt-1"),
+
+        Div(
+            H3("Amounts"),
+            row("Token amount", _fmt_token_amount(
+                payment.amount_token_received, token_decimals, token_symbol,
+            )),
+            row("Token price", _fmt_rate(
+                payment.rate_used, payment.rate_source, payment.rate_fetched_at,
+            )),
+            row("USD received", _fmt_usd_received(payment)),
+            row("USD expected",
+                f"${(payment.amount_usd_cents_expected or 0) / 100:.2f}"),
+            *([row("Ratio", ratio_note)] if ratio_note else []),
+            cls="card mt-3",
+        ),
 
         Div(
             H3("Details"),
@@ -516,17 +611,13 @@ def dashboard_payment_detail(merchant: dict, payment, token, chain) -> Main:
             row("Destination wallet", payment.wallet_address),
             row("Proxy", payment.proxy_address),
             row("Webhook URL", payment.webhook_url),
-            row("Amount expected",
-                f"${(payment.amount_usd_cents_expected or 0) / 100:.2f}"),
-            row("Amount received",
-                f"${(payment.amount_usd_cents_received or 0) / 100:.2f}"),
-            row("Rate used",
-                str(payment.rate_used) if payment.rate_used else "—"),
-            row("Rate source", payment.rate_source or "—"),
             _tx_row("Deploy tx", payment.deploy_tx_hash),
             _tx_row("Payment tx", payment.tx_hash),
             row("Block", payment.block_number or "—"),
             row("Created", payment.created_at.strftime("%Y-%m-%d %H:%M:%S")),
+            row("Detected",
+                payment.detected_at.strftime("%Y-%m-%d %H:%M:%S")
+                if payment.detected_at else "—"),
             row("Confirmed",
                 payment.confirmed_at.strftime("%Y-%m-%d %H:%M:%S")
                 if payment.confirmed_at else "—"),
