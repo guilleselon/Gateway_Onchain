@@ -1,18 +1,5 @@
 """
 Database connection and session management.
-
-Supports SQLite (local development) and PostgreSQL (production) transparently.
-
-The right driver and configuration are chosen based on the DATABASE_URL:
-
-    sqlite:///./gateway.db              -> SQLite with WAL mode
-    postgresql://user:pass@host/db      -> PostgreSQL via psycopg2
-    postgres://user:pass@host/db        -> PostgreSQL (legacy alias)
-
-Note: Render and some other PaaS providers still emit `postgres://` URLs.
-SQLAlchemy 2.x requires `postgresql://`, and by default picks the psycopg
-(v3) driver for that prefix. Since we install `psycopg2-binary`, we force
-the psycopg2 dialect with the explicit `+psycopg2` suffix.
 """
 
 import logging
@@ -24,10 +11,6 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import DATABASE_URL
 
-
-# ---------------------------------------------------------------------------
-# Normalize the URL
-# ---------------------------------------------------------------------------
 
 def _normalize_db_url(url: str) -> str:
     if url.startswith("postgres://"):
@@ -41,15 +24,8 @@ DATABASE_URL_NORMALIZED = _normalize_db_url(DATABASE_URL)
 IS_SQLITE = DATABASE_URL_NORMALIZED.startswith("sqlite")
 
 
-# ---------------------------------------------------------------------------
-# Engine
-# ---------------------------------------------------------------------------
-
 if IS_SQLITE:
-    connect_args = {
-        "check_same_thread": False,
-        "timeout": 30,
-    }
+    connect_args = {"check_same_thread": False, "timeout": 30}
     engine = create_engine(
         DATABASE_URL_NORMALIZED,
         connect_args=connect_args,
@@ -81,10 +57,7 @@ else:
 
 
 SessionLocal = sessionmaker(
-    bind=engine,
-    autoflush=False,
-    autocommit=False,
-    expire_on_commit=False,
+    bind=engine, autoflush=False, autocommit=False, expire_on_commit=False
 )
 
 
@@ -110,24 +83,14 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
 
 
-# ---------------------------------------------------------------------------
-# Lightweight schema migrations
-# ---------------------------------------------------------------------------
-
 def apply_schema_migrations() -> None:
-    """
-    Apply small schema changes that `create_all` cannot handle
-    (e.g. adding a column to an existing table).
-
-    Idempotent: checks the current schema before doing anything.
-    Runs on every startup but only acts if changes are needed.
-    """
+    """Idempotent schema migrations (adds missing columns)."""
     log = logging.getLogger("gateway.db")
     from sqlalchemy import inspect, text
 
     inspector = inspect(engine)
     if "payments" not in inspector.get_table_names():
-        return  # table doesn't exist yet; create_all will create it
+        return
 
     columns = [c["name"] for c in inspector.get_columns("payments")]
 
@@ -167,41 +130,79 @@ def apply_schema_migrations() -> None:
         log.info("Migration complete: amount_usd_micros_received added.")
 
 
-# ---------------------------------------------------------------------------
-# Auto-initialization
-# ---------------------------------------------------------------------------
-
-def ensure_db_initialized() -> None:
+def backfill_micros() -> None:
     """
-    Auto-initialize the database on startup.
+    One-time backfill of amount_usd_micros_received for payments detected
+    before the micros column existed.
 
-    Idempotent: safe to run every time the app boots. It:
-      0. Applies lightweight schema migrations (adds missing columns).
-      1. Creates all tables if they do not exist.
-      2. Seeds the chain from .env if there is none.
-      3. Seeds MON and USDC tokens if there are none.
-      4. Generates a demo API key if there are none, and prints it to the log.
+    Recomputes from amount_token_received + rate_used.
+    Only touches rows where micros IS NULL.
     """
     log = logging.getLogger("gateway.db")
+    from decimal import Decimal
+    from app.core.models import Payment, Token
 
-    # 0. Schema migrations first (adds columns to existing tables)
+    try:
+        with get_session() as s:
+            rows = (
+                s.query(Payment)
+                .filter(Payment.amount_usd_micros_received.is_(None))
+                .filter(Payment.amount_token_received.isnot(None))
+                .filter(Payment.rate_used.isnot(None))
+                .all()
+            )
+
+            if not rows:
+                log.info("Backfill: no rows need micros.")
+                return
+
+            updated = 0
+            skipped = 0
+            for p in rows:
+                token = s.get(Token, p.token_id)
+                if not token:
+                    skipped += 1
+                    continue
+                try:
+                    raw = Decimal(p.amount_token_received)
+                    divisor = Decimal(10 ** token.decimals)
+                    amount_token_dec = raw / divisor
+                    amount_usd = amount_token_dec * p.rate_used
+                    micros = int(round(amount_usd * 1_000_000))
+                    p.amount_usd_micros_received = micros
+                    p.amount_usd_cents_received = micros // 10_000
+                    updated += 1
+                except Exception as e:
+                    log.warning(f"Backfill: payment {p.id} failed: {e}")
+                    skipped += 1
+
+            log.info(
+                f"Backfill: updated {updated} payment(s), skipped {skipped}."
+            )
+    except Exception as e:
+        log.error(f"Backfill failed: {e}")
+
+
+def ensure_db_initialized() -> None:
+    """Idempotent auto-initialization on startup."""
+    log = logging.getLogger("gateway.db")
+
     try:
         apply_schema_migrations()
     except Exception as e:
         log.error(f"Schema migration failed: {e}")
 
-    # 1. Create tables
+    try:
+        backfill_micros()
+    except Exception as e:
+        log.error(f"Backfill failed: {e}")
+
     init_db()
     log.info("Database tables ensured.")
 
     from app.config import (
-        CHAIN_CONFIRMATIONS,
-        CHAIN_EXPLORER,
-        CHAIN_ID,
-        CHAIN_NAME,
-        FACTORY_ADDRESS,
-        MASTER_ADDRESS,
-        RPC_URL,
+        CHAIN_CONFIRMATIONS, CHAIN_EXPLORER, CHAIN_ID, CHAIN_NAME,
+        FACTORY_ADDRESS, MASTER_ADDRESS, RPC_URL,
     )
     from app.core.auth import hash_api_key
     from app.core.models import ApiKey, Chain, Token
